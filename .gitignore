@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+frontend/node_modules/
+.vs/
+.env
+.env.*
+!.env.example
