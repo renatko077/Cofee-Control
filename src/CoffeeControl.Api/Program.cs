@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 using CoffeeControl.Api;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
@@ -17,6 +18,7 @@ if (!string.IsNullOrWhiteSpace(cs) && cs.StartsWith("postgresql://", StringCompa
 }
 builder.Services.AddDbContext<AppDbContext>(o => o.UseNpgsql(cs ?? "Host=localhost;Database=coffeecontrol;Username=postgres;Password=postgres"));
 builder.Services.AddSingleton<TelegramAuth>(); builder.Services.AddControllers(); builder.Services.AddEndpointsApiExplorer();
+builder.Services.ConfigureHttpJsonOptions(o => { o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()); o.SerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles; });
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin()));
 var app = builder.Build(); app.UseForwardedHeaders(); app.UseDefaultFiles(); app.UseStaticFiles(); app.UseCors();
 using (var scope = app.Services.CreateScope()) { var db = scope.ServiceProvider.GetRequiredService<AppDbContext>(); await db.Database.MigrateAsync(); await DbSeeder.SeedAsync(db, default); }
