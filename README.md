@@ -18,7 +18,7 @@
 
 `DATABASE_URL` — Railway PostgreSQL URL (`postgresql://...`) или обычная Npgsql connection string.
 
-`TELEGRAM_BOT_TOKEN` — token от BotFather. `TELEGRAM_BOT_USERNAME` — username бота. `TELEGRAM_WEBAPP_URL` — публичный HTTPS URL приложения. `ADMIN_TELEGRAM_IDS` — Telegram ID администраторов через запятую. `ASPNETCORE_ENVIRONMENT=Production`. Опционально: `APP_BASE_URL`, `LOG_LEVEL`.
+`TELEGRAM_BOT_TOKEN` — token от BotFather. `TELEGRAM_BOT_USERNAME` — username бота. `TELEGRAM_WEBAPP_URL` — публичный HTTPS URL приложения. `ADMIN_TELEGRAM_IDS` — Telegram ID администраторов через запятую. `ASPNETCORE_ENVIRONMENT=Production`. `BUSINESS_TIME_ZONE` — часовой пояс бизнес-дня (по умолчанию `Europe/Vilnius`). Опционально: `APP_BASE_URL`, `LOG_LEVEL`.
 
 ## BotFather
 

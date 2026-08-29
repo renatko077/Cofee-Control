@@ -1,6 +1,117 @@
-import React,{useEffect,useState} from 'react'; import {createRoot} from 'react-dom/client'; import {Coffee,Plus,ShoppingBag,BarChart3,MoreHorizontal,Wallet,Clock,ArrowRight,Check,LogOut} from 'lucide-react'; import './style.css';
-type Product={id:string,name:string,category:string,icon:string,quick:boolean,variants:{id:string,name:string,price:number}[]}; type Dash={currentShift:any,revenue?:number,ordersCount?:number,cash?:number,card?:number,averageCheck?:number,recentOrders?:any[]};
-const api=async(path:string,options:RequestInit={})=>{const tg=(window as any).Telegram?.WebApp; const r=await fetch(path,{...options,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':tg?.initData||'',...(options.headers||{})}}); if(!r.ok){const body=await r.json().catch(()=>null); const details=body?.message||body?.detail||Object.values(body?.errors||{}).flat().join(' '); throw new Error(details||`Ошибка сервера (${r.status})`)} return r.json()};
-function App(){const [dash,setDash]=useState<Dash|null>(null),[products,setProducts]=useState<Product[]>([]),[tab,setTab]=useState('home'),[cash,setCash]=useState(''),[cart,setCart]=useState<{v:Product['variants'][0],p:Product,q:number}[]>([]),[pay,setPay]=useState<'Cash'|'Card'|null>(null),[busy,setBusy]=useState(false),[toast,setToast]=useState(''); useEffect(()=>{(window as any).Telegram?.WebApp?.ready(); Promise.all([api('/api/dashboard'),api('/api/products')]).then(([d,p])=>{setDash(d);setProducts(p)}).catch(e=>setToast(e.message))},[]); const money=(n=0)=>new Intl.NumberFormat('uk-UA',{style:'currency',currency:'UAH',maximumFractionDigits:0}).format(n); const open=async()=>{if(!cash)return;setBusy(true);try{await api('/api/shifts/open',{method:'POST',body:JSON.stringify({openingCash:+cash})});setDash(await api('/api/dashboard'));setToast('Смена открыта')}catch(e:any){setToast(e.message)}finally{setBusy(false)}}; const add=(p:Product)=>{const v=p.variants.find(x=>x.id===p.variants[0].id)!;setCart(c=>[...c,{p,v,q:1}]);setToast(`${p.name} добавлен`)}; const total=cart.reduce((s,x)=>s+x.v.price*x.q,0); const checkout=async()=>{if(!pay||!dash?.currentShift)return;setBusy(true);try{await api('/api/orders',{method:'POST',body:JSON.stringify({requestId:crypto.randomUUID(),items:cart.map(x=>({variantId:x.v.id,quantity:x.q})),payments:[{method:pay,amount:total}]})});setCart([]);setPay(null);setDash(await api('/api/dashboard'));setToast('Заказ успешно создан')}catch(e:any){setToast(e.message)}finally{setBusy(false)}};
- return <div className="app"><header><div className="brand"><div className="logo"><Coffee size={22}/></div><div><strong>Coffee Control</strong><small>{dash?.currentShift?'Смена открыта':'Рабочая касса'}</small></div></div><div className="avatar">{(dash as any)?.firstName?.[0]||'Б'}</div></header>{toast&&<div className="toast" onClick={()=>setToast('')}>{toast}</div>}{tab==='home'&&<main><div className="greeting">Добрый день 👋<h1>{dash?.currentShift?'Смена в работе':'Готовы открыть кофейню?'}</h1></div>{!dash?.currentShift?<section className="open-card"><Clock size={32}/><h2>Сегодня смена ещё не открыта</h2><p>Укажите наличные в кассе, чтобы начать работу.</p><input inputMode="decimal" placeholder="Наличные на начало, ₴" value={cash} onChange={e=>setCash(e.target.value)}/><button className="primary" onClick={open} disabled={busy}>Открыть смену <ArrowRight size={18}/></button></section>:<><div className="hero"><span>Выручка сегодня</span><b>{money(dash.revenue)}</b><small>{dash.ordersCount||0} заказов · с {new Date(dash.currentShift.openedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</small></div><div className="stats"><div><span>Наличные</span><b>{money(dash.cash)}</b></div><div><span>Карта</span><b>{money(dash.card)}</b></div><div><span>Средний чек</span><b>{money(dash.averageCheck)}</b></div></div><button className="primary big" onClick={()=>setTab('order')}><Plus/> Новый заказ</button><h2 className="section-title">Быстрый заказ</h2><div className="products">{products.filter(p=>p.quick).slice(0,6).map(p=><button className="product" key={p.id} onClick={()=>add(p)}><span>{p.category==='Кофе'?'☕':'🍰'}</span><b>{p.name}</b><small>{money(p.variants[0]?.price)}</small></button>)}</div></>}</main>}{tab==='order'&&<main><div className="title-row"><h1>Новый заказ</h1><button className="ghost" onClick={()=>setTab('home')}>Закрыть</button></div><div className="products">{products.map(p=><button className="product" key={p.id} onClick={()=>add(p)}><span>{p.category==='Кофе'?'☕':'🍰'}</span><b>{p.name}</b><small>{money(p.variants[0]?.price)}</small></button>)}</div>{cart.length>0&&<section className="cart"><h2>Корзина</h2>{cart.map((x,i)=><div className="cart-line" key={i}><span>{x.p.name} × {x.q}</span><b>{money(x.v.price*x.q)}</b></div>)}<div className="total"><span>Итого</span><b>{money(total)}</b></div><div className="pay"><button className={pay==='Cash'?'selected':''} onClick={()=>setPay('Cash')}>Наличные</button><button className={pay==='Card'?'selected':''} onClick={()=>setPay('Card')}>Карта</button></div><button className="primary" onClick={checkout} disabled={!pay||busy}>Подтвердить оплату <Check size={18}/></button></section>}</main>}{tab==='orders'&&<main><h1>Заказы</h1>{(dash?.recentOrders||[]).map(o=><div className="order"><div><b>#{o.number}</b><small>{new Date(o.createdAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</small></div><strong>{money(o.totalAmount)}</strong></div>)}{!dash?.recentOrders?.length&&<p className="muted">Заказов пока нет</p>}</main>}<nav><button className={tab==='home'?'active':''} onClick={()=>setTab('home')}><Wallet/>Главная</button><button className={tab==='orders'?'active':''} onClick={()=>setTab('orders')}><ShoppingBag/>Заказы</button><button className="add" onClick={()=>setTab('order')}><Plus/></button><button onClick={()=>setTab('analytics')}><BarChart3/>Аналитика</button><button><MoreHorizontal/>Ещё</button></nav></div>}
+import React,{useCallback,useEffect,useMemo,useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {ArrowRight,BarChart3,Check,Clock,Coffee,Minus,MoreHorizontal,Plus,RefreshCw,ShoppingBag,Trash2,Wallet,X} from 'lucide-react';
+import './style.css';
+
+type Variant={id:string,name:string,price:number,volumeMl?:number};
+type Product={id:string,name:string,category:string,icon?:string,quick:boolean,variants:Variant[]};
+type Shift={id:string,businessDate:string,openedAt:string,openingCash:number,expectedClosingCash:number,status:string};
+type Me={firstName:string,lastName?:string,username?:string,role:string};
+type Order={id:string,number:number,totalAmount:number,createdAt:string,status:string,payments:{method:string,amount:number}[],items:{name:string,variant:string,quantity:number,unitPrice:number,totalPrice:number}[]};
+type Dashboard={me?:Me,currentShift:Shift|null,revenue:number,ordersCount:number,cash:number,card:number,averageCheck:number,recentOrders:Order[]};
+type Analytics={periodDays:number,revenue:number,ordersCount:number,averageCheck:number,cash:number,card:number,daily:{date:string,revenue:number,ordersCount:number}[]};
+type CartLine={product:Product,variant:Variant,quantity:number};
+type Tab='home'|'order'|'orders'|'analytics'|'more';
+
+const api=async<T,>(path:string,options:RequestInit={}):Promise<T>=>{
+ const tg=(window as any).Telegram?.WebApp;
+ const response=await fetch(path,{...options,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':tg?.initData||'',...(options.headers||{})}});
+ if(!response.ok){const body=await response.json().catch(()=>null);const details=body?.message||body?.detail||Object.values(body?.errors||{}).flat().join(' ');throw new Error(details||`Ошибка сервера (${response.status})`)}
+ return response.json();
+};
+
+const money=(value=0)=>new Intl.NumberFormat('uk-UA',{style:'currency',currency:'UAH',maximumFractionDigits:2}).format(value);
+const dateTime=(value:string)=>new Date(value).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+
+function App(){
+ const [dashboard,setDashboard]=useState<Dashboard|null>(null);
+ const [products,setProducts]=useState<Product[]>([]);
+ const [orders,setOrders]=useState<Order[]>([]);
+ const [analytics,setAnalytics]=useState<Analytics|null>(null);
+ const [tab,setTab]=useState<Tab>('home');
+ const [category,setCategory]=useState('Все');
+ const [openingCash,setOpeningCash]=useState('');
+ const [actualCash,setActualCash]=useState('');
+ const [closeComment,setCloseComment]=useState('');
+ const [cart,setCart]=useState<CartLine[]>([]);
+ const [payment,setPayment]=useState<'Cash'|'Card'|null>(null);
+ const [busy,setBusy]=useState(false);
+ const [loading,setLoading]=useState(true);
+ const [toast,setToast]=useState('');
+
+ const refresh=useCallback(async()=>{
+  const [dash,orderList,report]=await Promise.all([api<Dashboard>('/api/dashboard'),api<Order[]>('/api/orders'),api<Analytics>('/api/analytics')]);
+  setDashboard(dash);setOrders(orderList);setAnalytics(report);
+ },[]);
+
+ useEffect(()=>{
+  (window as any).Telegram?.WebApp?.ready();(window as any).Telegram?.WebApp?.expand?.();
+  Promise.all([refresh(),api<Product[]>('/api/products').then(setProducts)]).catch(error=>setToast(error.message)).finally(()=>setLoading(false));
+ },[refresh]);
+
+ useEffect(()=>{if(dashboard?.currentShift&&!actualCash)setActualCash(String(dashboard.currentShift.expectedClosingCash||0))},[dashboard,actualCash]);
+ useEffect(()=>{if(!toast)return;const timer=setTimeout(()=>setToast(''),3500);return()=>clearTimeout(timer)},[toast]);
+
+ const categories=useMemo(()=>['Все',...Array.from(new Set(products.map(product=>product.category)))],[products]);
+ const visibleProducts=products.filter(product=>product.variants.length>0&&(category==='Все'||product.category===category));
+ const total=cart.reduce((sum,line)=>sum+line.variant.price*line.quantity,0);
+ const maxChart=Math.max(1,...(analytics?.daily.map(day=>day.revenue)||[1]));
+
+ const add=(product:Product,variant=product.variants[0])=>{
+  if(!variant)return;
+  setCart(current=>{const found=current.find(line=>line.variant.id===variant.id);return found?current.map(line=>line.variant.id===variant.id?{...line,quantity:line.quantity+1}:line):[...current,{product,variant,quantity:1}]});
+  setToast(`${product.name} добавлен`);
+ };
+ const changeQuantity=(variantId:string,delta:number)=>setCart(current=>current.map(line=>line.variant.id===variantId?{...line,quantity:line.quantity+delta}:line).filter(line=>line.quantity>0));
+
+ const openShift=async()=>{
+  const value=Number(openingCash.replace(',','.'));if(!Number.isFinite(value)||value<0){setToast('Введите корректную сумму в кассе');return}
+  setBusy(true);try{await api('/api/shifts/open',{method:'POST',body:JSON.stringify({openingCash:value})});await refresh();setOpeningCash('');setToast('Смена открыта')}catch(error:any){setToast(error.message)}finally{setBusy(false)}
+ };
+ const checkout=async()=>{
+  if(!payment||!dashboard?.currentShift||cart.length===0||total<=0)return;
+  setBusy(true);try{
+   await api('/api/orders',{method:'POST',body:JSON.stringify({requestId:crypto.randomUUID(),items:cart.map(line=>({variantId:line.variant.id,quantity:line.quantity})),payments:[{method:payment,amount:total}]})});
+   setCart([]);setPayment(null);await refresh();setTab('home');setToast('Заказ успешно создан');
+  }catch(error:any){setToast(error.message)}finally{setBusy(false)}
+ };
+ const closeShift=async()=>{
+  if(!dashboard?.currentShift)return;const value=Number(actualCash.replace(',','.'));if(!Number.isFinite(value)||value<0){setToast('Введите фактическую сумму в кассе');return}
+  setBusy(true);try{await api(`/api/shifts/${dashboard.currentShift.id}/close`,{method:'POST',body:JSON.stringify({actualCash:value,comment:closeComment||null})});setCart([]);setPayment(null);setActualCash('');setCloseComment('');await refresh();setTab('home');setToast('Смена закрыта')}catch(error:any){setToast(error.message)}finally{setBusy(false)}
+ };
+
+ if(loading)return <div className="loading"><Coffee/><span>Загружаем кофейню…</span></div>;
+ return <div className="app">
+  <header><div className="brand"><div className="logo"><Coffee size={22}/></div><div><strong>Coffee Control</strong><small>{dashboard?.currentShift?'Смена открыта':'Рабочая касса'}</small></div></div><button className="avatar" onClick={()=>setTab('more')}>{dashboard?.me?.firstName?.[0]||'Б'}</button></header>
+  {toast&&<div className="toast" onClick={()=>setToast('')}>{toast}</div>}
+
+  {tab==='home'&&<main>
+   <div className="greeting">Добрый день 👋<h1>{dashboard?.currentShift?'Смена в работе':'Готовы открыть кофейню?'}</h1></div>
+   {!dashboard?.currentShift?<section className="open-card"><Clock size={32}/><h2>Смена ещё не открыта</h2><p>Укажите наличные в кассе, чтобы начать работу.</p><input inputMode="decimal" placeholder="Наличные на начало, ₴" value={openingCash} onChange={event=>setOpeningCash(event.target.value)}/><button className="primary" onClick={openShift} disabled={busy}>{busy?'Открываем…':'Открыть смену'} <ArrowRight size={18}/></button></section>:<>
+    <div className="hero"><span>Выручка смены</span><b>{money(dashboard.revenue)}</b><small>{dashboard.ordersCount||0} заказов · с {dateTime(dashboard.currentShift.openedAt)}</small></div>
+    <div className="stats"><div><span>Наличные</span><b>{money(dashboard.cash)}</b></div><div><span>Карта</span><b>{money(dashboard.card)}</b></div><div><span>Средний чек</span><b>{money(dashboard.averageCheck)}</b></div></div>
+    <button className="primary big" onClick={()=>setTab('order')}><Plus/> Новый заказ</button>
+    <h2 className="section-title">Быстрый заказ</h2><div className="products">{products.filter(product=>product.quick&&product.variants.length).slice(0,6).map(product=><button className="product" key={product.id} onClick={()=>add(product)}><span>{product.icon||'☕'}</span><b>{product.name}</b><small>{money(product.variants[0].price)}</small></button>)}</div>
+   </>}
+  </main>}
+
+  {tab==='order'&&<main>
+   <div className="title-row"><div><small>Продажа</small><h1>Новый заказ</h1></div><button className="icon-button" onClick={()=>setTab('home')}><X/></button></div>
+   {!dashboard?.currentShift?<div className="empty"><Clock/><h2>Смена закрыта</h2><p>Сначала откройте смену на главной.</p><button className="secondary" onClick={()=>setTab('home')}>На главную</button></div>:<>
+    <div className="chips">{categories.map(item=><button key={item} className={category===item?'active':''} onClick={()=>setCategory(item)}>{item}</button>)}</div>
+    <div className="products">{visibleProducts.map(product=><button className="product" key={product.id} onClick={()=>add(product)}><span>{product.icon||'☕'}</span><b>{product.name}</b><small>{product.variants[0].name} · {money(product.variants[0].price)}</small></button>)}</div>
+    {cart.length>0&&<section className="cart"><div className="cart-head"><h2>Корзина</h2><button className="ghost danger" onClick={()=>setCart([])}><Trash2 size={16}/> Очистить</button></div>{cart.map(line=><div className="cart-line" key={line.variant.id}><div><b>{line.product.name}</b><small>{line.variant.name} · {money(line.variant.price)}</small></div><div className="quantity"><button onClick={()=>changeQuantity(line.variant.id,-1)}><Minus/></button><b>{line.quantity}</b><button onClick={()=>changeQuantity(line.variant.id,1)}><Plus/></button></div><strong>{money(line.variant.price*line.quantity)}</strong></div>)}<div className="total"><span>Итого</span><b>{money(total)}</b></div><div className="pay"><button className={payment==='Cash'?'selected':''} onClick={()=>setPayment('Cash')}>Наличные</button><button className={payment==='Card'?'selected':''} onClick={()=>setPayment('Card')}>Карта</button></div><button className="primary" onClick={checkout} disabled={!payment||busy}>{busy?'Сохраняем…':'Подтвердить оплату'} <Check size={18}/></button></section>}
+   </>}
+  </main>}
+
+  {tab==='orders'&&<main><div className="title-row"><div><small>Последние 200</small><h1>Заказы</h1></div><button className="icon-button" onClick={()=>refresh().catch(error=>setToast(error.message))}><RefreshCw/></button></div>{orders.map(order=><article className="order-card" key={order.id}><div className="order-top"><div><b>Заказ #{order.number}</b><small>{dateTime(order.createdAt)}</small></div><strong>{money(order.totalAmount)}</strong></div><div className="order-items">{order.items.map((item,index)=><span key={index}>{item.name} × {item.quantity}</span>)}</div><small>{order.payments.map(item=>item.method==='Cash'?'Наличные':'Карта').join(' + ')}</small></article>)}{orders.length===0&&<div className="empty"><ShoppingBag/><h2>Заказов пока нет</h2><p>Созданные продажи появятся здесь.</p></div>}</main>}
+
+  {tab==='analytics'&&<main><div className="title-row"><div><small>Последние 7 дней</small><h1>Аналитика</h1></div><button className="icon-button" onClick={()=>refresh().catch(error=>setToast(error.message))}><RefreshCw/></button></div>{analytics&&<><div className="hero"><span>Выручка за неделю</span><b>{money(analytics.revenue)}</b><small>{analytics.ordersCount} заказов · средний чек {money(analytics.averageCheck)}</small></div><div className="stats"><div><span>Наличные</span><b>{money(analytics.cash)}</b></div><div><span>Карта</span><b>{money(analytics.card)}</b></div><div><span>Заказы</span><b>{analytics.ordersCount}</b></div></div><section className="chart-card"><h2>По дням</h2><div className="chart">{analytics.daily.map(day=><div className="bar-wrap" key={day.date}><div className="bar-value">{day.ordersCount||''}</div><div className="bar" style={{height:`${Math.max(4,day.revenue/maxChart*120)}px`}}></div><small>{new Date(`${day.date}T00:00:00`).toLocaleDateString('ru-RU',{weekday:'short'})}</small></div>)}</div></section></>}</main>}
+
+  {tab==='more'&&<main><small>Настройки и касса</small><h1>Ещё</h1><section className="profile-card"><div className="profile-avatar">{dashboard?.me?.firstName?.[0]||'Б'}</div><div><b>{dashboard?.me?.firstName} {dashboard?.me?.lastName||''}</b><small>{dashboard?.me?.username?'@'+dashboard.me.username:dashboard?.me?.role}</small></div></section>{dashboard?.currentShift?<section className="close-card"><h2>Закрытие смены</h2><p>Ожидается в кассе: <b>{money(dashboard.currentShift.openingCash+dashboard.cash)}</b></p><label>Фактически в кассе<input inputMode="decimal" value={actualCash} onChange={event=>setActualCash(event.target.value)} placeholder="Сумма после пересчёта"/></label><label>Комментарий<input value={closeComment} onChange={event=>setCloseComment(event.target.value)} placeholder="Необязательно"/></label><button className="primary danger-button" onClick={closeShift} disabled={busy}>{busy?'Закрываем…':'Закрыть смену'}</button></section>:<div className="empty"><Clock/><h2>Нет открытой смены</h2><button className="secondary" onClick={()=>setTab('home')}>Открыть смену</button></div>}<section className="about"><b>Coffee Control</b><small>Касса, смены, заказы и аналитика</small></section></main>}
+
+  <nav><button className={tab==='home'?'active':''} onClick={()=>setTab('home')}><Wallet/>Главная</button><button className={tab==='orders'?'active':''} onClick={()=>setTab('orders')}><ShoppingBag/>Заказы</button><button className="add" onClick={()=>setTab('order')}><Plus/></button><button className={tab==='analytics'?'active':''} onClick={()=>setTab('analytics')}><BarChart3/>Аналитика</button><button className={tab==='more'?'active':''} onClick={()=>setTab('more')}><MoreHorizontal/>Ещё</button></nav>
+ </div>;
+}
+
 createRoot(document.getElementById('root')!).render(<App/>);

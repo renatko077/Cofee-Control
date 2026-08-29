@@ -2,6 +2,7 @@
 **/obj/
 frontend/node_modules/
 .vs/
+.artifacts/
 .env
 .env.*
 !.env.example
