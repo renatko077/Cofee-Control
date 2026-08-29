@@ -192,23 +192,26 @@ app.MapGet("/api/orders", async (HttpRequest request, AppDbContext db, TelegramA
     return Results.Ok(orders.Select(OrderDto));
 });
 
-app.MapGet("/api/analytics", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+app.MapGet("/api/analytics", async (string? period, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
 {
     var user = await auth.AuthenticateAsync(request, db, ct);
     if (user is null) return Results.Unauthorized();
-    var from = BusinessClock.Today().AddDays(-6);
+    var today = BusinessClock.Today();
+    var selectedPeriod = period?.ToLowerInvariant() switch { "today" => "today", "month" => "month", _ => "week" };
+    var from = selectedPeriod switch { "today" => today, "month" => new DateOnly(today.Year, today.Month, 1), _ => today.AddDays(-6) };
+    var periodDays = today.DayNumber - from.DayNumber + 1;
     var rows = await db.Orders.AsNoTracking().Include(order => order.Payments)
         .Where(order => order.UserId == user.Id && order.Status == OrderStatus.Completed && order.Shift.BusinessDate >= from)
         .Select(order => new { order.Shift.BusinessDate, order.TotalAmount, Payments = order.Payments.Select(payment => new { payment.PaymentMethod, payment.Amount }) })
         .ToListAsync(ct);
-    var daily = Enumerable.Range(0, 7).Select(offset => from.AddDays(offset)).Select(date =>
+    var daily = Enumerable.Range(0, periodDays).Select(offset => from.AddDays(offset)).Select(date =>
     {
         var orders = rows.Where(row => row.BusinessDate == date).ToList();
         return new { date, revenue = orders.Sum(order => order.TotalAmount), ordersCount = orders.Count };
     }).ToList();
     return Results.Ok(new
     {
-        periodDays = 7, revenue = rows.Sum(row => row.TotalAmount), ordersCount = rows.Count,
+        period = selectedPeriod, periodDays, revenue = rows.Sum(row => row.TotalAmount), ordersCount = rows.Count,
         averageCheck = rows.Count == 0 ? 0 : rows.Average(row => row.TotalAmount),
         cash = rows.SelectMany(row => row.Payments).Where(payment => payment.PaymentMethod == PaymentMethod.Cash).Sum(payment => payment.Amount),
         card = rows.SelectMany(row => row.Payments).Where(payment => payment.PaymentMethod == PaymentMethod.Card).Sum(payment => payment.Amount), daily
