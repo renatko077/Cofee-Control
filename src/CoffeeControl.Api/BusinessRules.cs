@@ -4,6 +4,16 @@ public sealed record ShiftMetrics(decimal Revenue, int OrdersCount, decimal Cash
 
 public static class BusinessRules
 {
+    public static readonly IReadOnlyDictionary<string, int> CoffeePortionsPerUnit = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Американо"] = 2, ["Эспрессо"] = 2, ["Капучино"] = 1, ["Флэт уайт"] = 2,
+        ["Латте"] = 1, ["Дабл капучино"] = 2, ["Раф"] = 1, ["Лунго"] = 2,
+        ["Айс латте"] = 1, ["Хорнет"] = 1, ["Эспрессо-тоник"] = 1
+    };
+
+    public static int GetCoffeePortions(string productName, int quantity)
+        => CoffeePortionsPerUnit.TryGetValue(productName, out var portions) ? portions * quantity : 0;
+
     public static ShiftMetrics CalculateShift(decimal openingCash, IEnumerable<Order> orders)
     {
         var completed = orders.Where(order => order.Status == OrderStatus.Completed).ToList();

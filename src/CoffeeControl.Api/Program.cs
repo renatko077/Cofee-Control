@@ -8,6 +8,7 @@ using Serilog;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.ReplyMarkups;
+using UglyToad.PdfPig;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseSerilog((ctx, log) => log.ReadFrom.Configuration(ctx.Configuration).WriteTo.Console());
@@ -177,7 +178,9 @@ app.MapPost("/api/orders", async (HttpRequest request, AppDbContext db, Telegram
         if (item.ModifierAmount != modifierAmount) return Results.BadRequest(new { code = "INVALID_MODIFIERS", message = "Проверьте выбранные добавки." });
         var unitPrice = variant.Price + modifierAmount;
         if (unitPrice < 0) return Results.BadRequest(new { code = "INVALID_PRICE", message = "Цена позиции не может быть отрицательной." });
-        var orderItem = new OrderItem { ProductId = variant.ProductId, ProductVariantId = variant.Id, ProductNameSnapshot = variant.Product.Name, VariantNameSnapshot = variant.Name, BasePrice = variant.Price, Quantity = item.Quantity, UnitPrice = unitPrice, TotalPrice = unitPrice * item.Quantity };
+        var coffeePortions = BusinessRules.GetCoffeePortions(variant.Product.Name, item.Quantity);
+        var decafPackets = modifiers.Where(modifier => modifier.Name.Equals("Без кофеина", StringComparison.OrdinalIgnoreCase)).Sum(modifier => modifier.Quantity) * item.Quantity;
+        var orderItem = new OrderItem { ProductId = variant.ProductId, ProductVariantId = variant.Id, ProductNameSnapshot = variant.Product.Name, VariantNameSnapshot = variant.Name, BasePrice = variant.Price, Quantity = item.Quantity, CoffeePortions = coffeePortions, DecafPackets = decafPackets, UnitPrice = unitPrice, TotalPrice = unitPrice * item.Quantity };
         orderItem.Modifiers = modifiers.Select(modifier => new OrderItemModifier { ModifierNameSnapshot = modifier.Name, PriceAdjustmentSnapshot = ModifierPrices.Values[modifier.Name], Quantity = modifier.Quantity }).ToList();
         order.Items.Add(orderItem);
     }
@@ -209,9 +212,15 @@ app.MapGet("/api/analytics", async (string? period, HttpRequest request, AppDbCo
     var from = selectedPeriod switch { "today" => today, "month" => new DateOnly(today.Year, today.Month, 1), _ => today.AddDays(-6) };
     var periodDays = today.DayNumber - from.DayNumber + 1;
     var rows = await db.Orders.AsNoTracking().Include(order => order.Payments)
-        .Where(order => order.UserId == user.Id && order.Status == OrderStatus.Completed && order.Shift.BusinessDate >= from)
+        .Where(order => order.UserId == user.Id && order.Status == OrderStatus.Completed && order.Shift.BusinessDate >= from && order.Shift.BusinessDate <= today)
         .Select(order => new { order.Shift.BusinessDate, order.TotalAmount, Payments = order.Payments.Select(payment => new { payment.PaymentMethod, payment.Amount }) })
         .ToListAsync(ct);
+    var sales = await db.OrderItems.AsNoTracking()
+        .Where(item => item.Order.UserId == user.Id && item.Order.Status == OrderStatus.Completed && item.Order.Shift.BusinessDate >= from && item.Order.Shift.BusinessDate <= today)
+        .Select(item => new { Name = item.ProductNameSnapshot, item.Quantity, item.TotalPrice, item.CoffeePortions, item.DecafPackets })
+        .ToListAsync(ct);
+    var catalog = await db.Products.AsNoTracking().Where(product => product.IsActive && product.Category.IsActive)
+        .OrderBy(product => product.Category.SortOrder).ThenBy(product => product.SortOrder).Select(product => product.Name).Distinct().ToListAsync(ct);
     var daily = Enumerable.Range(0, periodDays).Select(offset => from.AddDays(offset)).Select(date =>
     {
         var orders = rows.Where(row => row.BusinessDate == date).ToList();
@@ -222,8 +231,24 @@ app.MapGet("/api/analytics", async (string? period, HttpRequest request, AppDbCo
         period = selectedPeriod, periodDays, revenue = rows.Sum(row => row.TotalAmount), ordersCount = rows.Count,
         averageCheck = rows.Count == 0 ? 0 : rows.Average(row => row.TotalAmount),
         cash = rows.SelectMany(row => row.Payments).Where(payment => payment.PaymentMethod == PaymentMethod.Cash).Sum(payment => payment.Amount),
-        card = rows.SelectMany(row => row.Payments).Where(payment => payment.PaymentMethod == PaymentMethod.Card).Sum(payment => payment.Amount), daily
+        card = rows.SelectMany(row => row.Payments).Where(payment => payment.PaymentMethod == PaymentMethod.Card).Sum(payment => payment.Amount), daily,
+        coffeePortions = sales.Sum(item => item.CoffeePortions), decafPackets = sales.Sum(item => item.DecafPackets),
+        positions = catalog.Select(name => new { name, quantity = sales.Where(item => item.Name == name).Sum(item => item.Quantity), revenue = sales.Where(item => item.Name == name).Sum(item => item.TotalPrice), coffeePortions = sales.Where(item => item.Name == name).Sum(item => item.CoffeePortions), decafPackets = sales.Where(item => item.Name == name).Sum(item => item.DecafPackets) })
     });
+});
+
+app.MapPost("/api/analytics/daily-pdf", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    var form = await request.ReadFormAsync(ct);
+    var file = form.Files.GetFile("file");
+    if (file is null || file.Length == 0 || file.Length > 10 * 1024 * 1024 || !file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { code = "INVALID_PDF", message = "Загрузите PDF-файл размером до 10 МБ." });
+    await using var stream = file.OpenReadStream();
+    using var pdf = PdfDocument.Open(stream);
+    var pages = pdf.GetPages().Select(page => string.Join(" ", page.GetWords().Select(word => word.Text))).Where(text => !string.IsNullOrWhiteSpace(text)).ToList();
+    return Results.Ok(new { fileName = file.FileName, pageCount = pages.Count, text = string.Join(Environment.NewLine, pages) });
 });
 
 app.MapFallbackToFile("index.html");
@@ -231,7 +256,7 @@ app.Run();
 
 static object UserDto(CoffeeControl.Api.User user) => new { id = user.Id, user.FirstName, user.LastName, user.Username, user.Role };
 static object ShiftDto(Shift shift) => new { id = shift.Id, shift.BusinessDate, shift.OpenedAt, shift.ClosedAt, shift.OpeningCash, shift.ExpectedClosingCash, shift.ActualClosingCash, shift.CashDifference, shift.Status, shift.Comment };
-static object OrderDto(Order order) => new { id = order.Id, order.Number, order.TotalAmount, order.CreatedAt, status = order.Status.ToString(), payments = order.Payments.Select(payment => new { method = payment.PaymentMethod.ToString(), payment.Amount }), items = order.Items.Select(item => new { name = item.ProductNameSnapshot, variant = item.VariantNameSnapshot, item.Quantity, item.UnitPrice, item.TotalPrice, modifiers = item.Modifiers.Select(modifier => new { name = modifier.ModifierNameSnapshot, modifier.Quantity }) }) };
+static object OrderDto(Order order) => new { id = order.Id, order.Number, order.TotalAmount, order.CreatedAt, status = order.Status.ToString(), payments = order.Payments.Select(payment => new { method = payment.PaymentMethod.ToString(), payment.Amount }), items = order.Items.Select(item => new { name = item.ProductNameSnapshot, variant = item.VariantNameSnapshot, item.Quantity, item.CoffeePortions, item.DecafPackets, item.UnitPrice, item.TotalPrice, modifiers = item.Modifiers.Select(modifier => new { name = modifier.ModifierNameSnapshot, modifier.Quantity }) }) };
 
 public record OpenShiftDto(decimal OpeningCash);
 public record CloseShiftDto(decimal ActualCash, string? Comment);
