@@ -40,6 +40,27 @@ public class BusinessRulesTests
     public void Cash_difference_is_actual_minus_expected(decimal actual, decimal expected, decimal difference)
         => Assert.Equal(difference, actual - expected);
 
+    [Theory]
+    [InlineData("Американо", 1, 2)]
+    [InlineData("Эспрессо", 2, 4)]
+    [InlineData("Капучино", 3, 3)]
+    [InlineData("Флэт уайт", 2, 4)]
+    [InlineData("Дабл капучино", 1, 2)]
+    [InlineData("Айс латте", 2, 2)]
+    [InlineData("Эспрессо-тоник", 1, 1)]
+    [InlineData("Брауни", 4, 0)]
+    public void Coffee_portions_follow_menu_recipe(string product, int quantity, int expected)
+        => Assert.Equal(expected, BusinessRules.GetCoffeePortions(product, quantity));
+
+    [Theory]
+    [InlineData("Латте", true)]
+    [InlineData("Чай", true)]
+    [InlineData("Горячий шоколад", true)]
+    [InlineData("Coca-Cola", false)]
+    [InlineData("Маффин", false)]
+    public void Cup_count_includes_prepared_drinks_only(string product, bool expected)
+        => Assert.Equal(expected, BusinessRules.UsesCup(product));
+
     private static Order Order(decimal total, OrderStatus status, params (PaymentMethod method, decimal amount)[] payments)
         => new() { TotalAmount = total, Status = status, Payments = payments.Select(payment => new Payment { PaymentMethod = payment.method, Amount = payment.amount }).ToList() };
 }

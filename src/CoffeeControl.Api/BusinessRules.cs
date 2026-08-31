@@ -6,13 +6,24 @@ public static class BusinessRules
 {
     public static readonly IReadOnlyDictionary<string, int> CoffeePortionsPerUnit = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
     {
-        ["Американо"] = 2, ["Эспрессо"] = 2, ["Капучино"] = 1, ["Флэт уайт"] = 2,
-        ["Латте"] = 1, ["Дабл капучино"] = 2, ["Раф"] = 1, ["Лунго"] = 2,
-        ["Айс латте"] = 1, ["Хорнет"] = 1, ["Эспрессо-тоник"] = 1
+        ["Американо"] = 2, ["Американо с молоком"] = 2, ["Эспрессо"] = 2, ["Капучино"] = 1, ["Капучинно"] = 1,
+        ["Флэт уайт"] = 2, ["Флет"] = 2, ["Латте"] = 1, ["Дабл капучино"] = 2,
+        ["Дабл кап"] = 2, ["Раф"] = 1, ["Лунго"] = 2, ["Лунга"] = 2,
+        ["Айс латте"] = 1, ["Хорнет"] = 1, ["Эспрессо-тоник"] = 1, ["Эспресс тоник"] = 1
+    };
+
+    private static readonly HashSet<string> CupProducts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Американо", "Американо с молоком", "Эспрессо", "Капучино", "Капучинно", "Флэт уайт", "Флет",
+        "Латте", "Дабл капучино", "Дабл кап", "Раф", "Лунго", "Лунга", "Айс латте", "Хорнет",
+        "Эспрессо-тоник", "Эспресс тоник", "Глинтвейн", "Какао", "Горячий шоколад", "Матча лате",
+        "Матча айс", "Лимонад", "Мохито", "Чай"
     };
 
     public static int GetCoffeePortions(string productName, int quantity)
         => CoffeePortionsPerUnit.TryGetValue(productName, out var portions) ? portions * quantity : 0;
+
+    public static bool UsesCup(string productName) => CupProducts.Contains(productName);
 
     public static ShiftMetrics CalculateShift(decimal openingCash, IEnumerable<Order> orders)
     {
