@@ -12,7 +12,8 @@ type Order={id:string,number:number,totalAmount:number,createdAt:string,status:s
 type Dashboard={me?:Me,currentShift:Shift|null,revenue:number,ordersCount:number,cash:number,card:number,averageCheck:number,recentOrders:Order[]};
 type AnalyticsPeriod='today'|'week'|'month';
 type Analytics={period:AnalyticsPeriod,periodDays:number,revenue:number,ordersCount:number,averageCheck:number,cash:number,card:number,daily:{date:string,revenue:number,ordersCount:number}[]};
-type CartLine={product:Product,variant:Variant,quantity:number};
+type ModifierName='Сироп'|'Растительное молоко'|'Без кофеина';
+type CartLine={product:Product,variant:Variant,quantity:number,modifiers:ModifierName[]};
 type Tab='home'|'order'|'orders'|'analytics'|'more';
 
 const api=async<T,>(path:string,options:RequestInit={}):Promise<T>=>{
@@ -24,6 +25,8 @@ const api=async<T,>(path:string,options:RequestInit={}):Promise<T>=>{
 
 const money=(value=0)=>new Intl.NumberFormat('uk-UA',{style:'currency',currency:'UAH',maximumFractionDigits:2}).format(value);
 const dateTime=(value:string)=>new Date(value).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+const modifierPrices:Record<ModifierName,number>={'Сироп':15,'Растительное молоко':45,'Без кофеина':15};
+const modifiers:Array<{name:ModifierName,label:string}>=[{name:'Сироп',label:'Сироп +15'},{name:'Растительное молоко',label:'Растительное молоко +45'},{name:'Без кофеина',label:'Без кофеина +15'}];
 
 function App(){
  const [dashboard,setDashboard]=useState<Dashboard|null>(null);
@@ -58,15 +61,17 @@ function App(){
 
  const categories=useMemo(()=>['Все',...Array.from(new Set(products.map(product=>product.category)))],[products]);
  const visibleProducts=products.filter(product=>product.variants.length>0&&(category==='Все'||product.category===category));
- const total=cart.reduce((sum,line)=>sum+line.variant.price*line.quantity,0);
+ const lineTotal=(line:CartLine)=>line.quantity*(line.variant.price+line.modifiers.reduce((sum,name)=>sum+modifierPrices[name],0));
+ const total=cart.reduce((sum,line)=>sum+lineTotal(line),0);
  const maxChart=Math.max(1,...(analytics?.daily.map(day=>day.revenue)||[1]));
 
  const add=(product:Product,variant=product.variants[0])=>{
   if(!variant)return;
-  setCart(current=>{const found=current.find(line=>line.variant.id===variant.id);return found?current.map(line=>line.variant.id===variant.id?{...line,quantity:line.quantity+1}:line):[...current,{product,variant,quantity:1}]});
+  setCart(current=>{const found=current.find(line=>line.variant.id===variant.id&&line.modifiers.length===0);return found?current.map(line=>line.variant.id===variant.id&&line.modifiers.length===0?{...line,quantity:line.quantity+1}:line):[...current,{product,variant,quantity:1,modifiers:[]}]});
   setToast(`${product.name} добавлен`);
  };
  const changeQuantity=(variantId:string,delta:number)=>setCart(current=>current.map(line=>line.variant.id===variantId?{...line,quantity:line.quantity+delta}:line).filter(line=>line.quantity>0));
+ const toggleModifier=(variantId:string,name:ModifierName)=>setCart(current=>current.map(line=>line.variant.id!==variantId?line:line.modifiers.includes(name)?{...line,modifiers:line.modifiers.filter(item=>item!==name)}:{...line,modifiers:[...line.modifiers,name]}));
 
  const openShift=async()=>{
   const value=Number(openingCash.replace(',','.'));if(!Number.isFinite(value)||value<0){setToast('Введите корректную сумму в кассе');return}
@@ -75,7 +80,7 @@ function App(){
  const checkout=async()=>{
   if(!payment||!dashboard?.currentShift||cart.length===0||total<=0)return;
   setBusy(true);try{
-   await api('/api/orders',{method:'POST',body:JSON.stringify({requestId:crypto.randomUUID(),items:cart.map(line=>({variantId:line.variant.id,quantity:line.quantity})),payments:[{method:payment,amount:total}]})});
+   await api('/api/orders',{method:'POST',body:JSON.stringify({requestId:crypto.randomUUID(),items:cart.map(line=>({variantId:line.variant.id,quantity:line.quantity,modifierAmount:line.modifiers.reduce((sum,name)=>sum+modifierPrices[name],0),modifiers:line.modifiers.map(name=>({name}))})),payments:[{method:payment,amount:total}]})});
    setCart([]);setPayment(null);await refresh(analyticsPeriod);setTab('home');setToast('Заказ успешно создан');
   }catch(error:any){setToast(error.message)}finally{setBusy(false)}
  };
@@ -104,7 +109,7 @@ function App(){
    {!dashboard?.currentShift?<div className="empty"><Clock/><h2>Смена закрыта</h2><p>Сначала откройте смену на главной.</p><button className="secondary" onClick={()=>setTab('home')}>На главную</button></div>:<>
     <div className="chips">{categories.map(item=><button key={item} className={category===item?'active':''} onClick={()=>setCategory(item)}>{item}</button>)}</div>
     <div className="products">{visibleProducts.map(product=><button className="product" key={product.id} onClick={()=>add(product)}><span>{product.icon||'☕'}</span><b>{product.name}</b><small>{product.variants[0].name} · {money(product.variants[0].price)}</small></button>)}</div>
-    {cart.length>0&&<section className="cart"><div className="cart-head"><h2>Корзина</h2><button className="ghost danger" onClick={()=>setCart([])}><Trash2 size={16}/> Очистить</button></div>{cart.map(line=><div className="cart-line" key={line.variant.id}><div><b>{line.product.name}</b><small>{line.variant.name} · {money(line.variant.price)}</small></div><div className="quantity"><button onClick={()=>changeQuantity(line.variant.id,-1)}><Minus/></button><b>{line.quantity}</b><button onClick={()=>changeQuantity(line.variant.id,1)}><Plus/></button></div><strong>{money(line.variant.price*line.quantity)}</strong></div>)}<div className="total"><span>Итого</span><b>{money(total)}</b></div><div className="pay"><button className={payment==='Cash'?'selected':''} onClick={()=>setPayment('Cash')}>Наличные</button><button className={payment==='Card'?'selected':''} onClick={()=>setPayment('Card')}>Карта</button></div><button className="primary" onClick={checkout} disabled={!payment||busy}>{busy?'Сохраняем…':'Подтвердить оплату'} <Check size={18}/></button></section>}
+    {cart.length>0&&<section className="cart"><div className="cart-head"><h2>Корзина</h2><button className="ghost danger" onClick={()=>setCart([])}><Trash2 size={16}/> Очистить</button></div>{cart.map(line=><div className="cart-line" key={`${line.variant.id}-${line.modifiers.join('-')}`}><div><b>{line.product.name}</b><small>{line.variant.name} · {money(line.variant.price+line.modifiers.reduce((sum,name)=>sum+modifierPrices[name],0))}</small><div className="modifiers">{modifiers.map(modifier=><button key={modifier.name} className={line.modifiers.includes(modifier.name)?'selected':''} onClick={()=>toggleModifier(line.variant.id,modifier.name)}>{modifier.label}</button>)}</div></div><div className="quantity"><button onClick={()=>changeQuantity(line.variant.id,-1)}><Minus/></button><b>{line.quantity}</b><button onClick={()=>changeQuantity(line.variant.id,1)}><Plus/></button></div><strong>{money(lineTotal(line))}</strong></div>)}<div className="total"><span>Итого</span><b>{money(total)}</b></div><div className="pay"><button className={payment==='Cash'?'selected':''} onClick={()=>setPayment('Cash')}>Наличные</button><button className={payment==='Card'?'selected':''} onClick={()=>setPayment('Card')}>Карта</button></div><button className="primary" onClick={checkout} disabled={!payment||busy}>{busy?'Сохраняем…':'Подтвердить оплату'} <Check size={18}/></button></section>}
    </>}
   </main>}
 

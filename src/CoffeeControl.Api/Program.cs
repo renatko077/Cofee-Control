@@ -103,6 +103,7 @@ app.MapGet("/api/dashboard", async (HttpRequest request, AppDbContext db, Telegr
     var shift = await db.Shifts.AsNoTracking()
         .Include(item => item.Orders).ThenInclude(order => order.Payments)
         .Include(item => item.Orders).ThenInclude(order => order.Items)
+        .Include(item => item.Orders).ThenInclude(order => order.Items).ThenInclude(item => item.Modifiers)
         .Where(item => item.UserId == user.Id && item.Status == ShiftStatus.Open)
         .OrderByDescending(item => item.OpenedAt).FirstOrDefaultAsync(ct);
     if (shift is null) return Results.Ok(new { me = UserDto(user), currentShift = (object?)null, revenue = 0m, ordersCount = 0, cash = 0m, card = 0m, averageCheck = 0m, recentOrders = Array.Empty<object>() });
@@ -153,10 +154,11 @@ app.MapPost("/api/orders", async (HttpRequest request, AppDbContext db, Telegram
     var user = await auth.AuthenticateAsync(request, db, ct);
     if (user is null) return Results.Unauthorized();
     if (string.IsNullOrWhiteSpace(dto.RequestId) || dto.RequestId.Length > 100 || dto.Items is null || dto.Items.Count == 0 ||
-        dto.Items.Count > 100 || dto.Items.Any(item => item.Quantity is <= 0 or > 100 || item.ModifierAmount < -100000) ||
+        dto.Items.Count > 100 || dto.Items.Any(item => item.Quantity is <= 0 or > 100 || item.ModifierAmount < 0 ||
+            item.Modifiers?.Any(modifier => !ModifierPrices.ContainsKey(modifier.Name) || modifier.Quantity is <= 0 or > 3) == true) ||
         dto.Payments is null || dto.Payments.Count == 0 || dto.Payments.Any(payment => payment.Amount <= 0))
         return Results.BadRequest(new { code = "INVALID_ORDER", message = "Проверьте позиции и способ оплаты." });
-    var existing = await db.Orders.AsNoTracking().Include(order => order.Items).Include(order => order.Payments)
+    var existing = await db.Orders.AsNoTracking().Include(order => order.Items).ThenInclude(item => item.Modifiers).Include(order => order.Payments)
         .SingleOrDefaultAsync(order => order.RequestId == dto.RequestId, ct);
     if (existing is not null) return Results.Ok(OrderDto(existing));
     var shift = await db.Shifts.OrderByDescending(item => item.OpenedAt).FirstOrDefaultAsync(item => item.UserId == user.Id && item.Status == ShiftStatus.Open, ct);
@@ -169,9 +171,15 @@ app.MapPost("/api/orders", async (HttpRequest request, AppDbContext db, Telegram
     foreach (var item in dto.Items)
     {
         if (!variants.TryGetValue(item.VariantId, out var variant)) return Results.BadRequest(new { code = "PRODUCT_NOT_FOUND", message = "Один из товаров больше недоступен. Обновите меню." });
-        var unitPrice = variant.Price + item.ModifierAmount;
+        var modifiers = (item.Modifiers ?? []).GroupBy(modifier => modifier.Name)
+            .Select(group => new { Name = group.Key, Quantity = group.Sum(modifier => modifier.Quantity) }).ToList();
+        var modifierAmount = modifiers.Sum(modifier => ModifierPrices.Values[modifier.Name] * modifier.Quantity);
+        if (item.ModifierAmount != modifierAmount) return Results.BadRequest(new { code = "INVALID_MODIFIERS", message = "Проверьте выбранные добавки." });
+        var unitPrice = variant.Price + modifierAmount;
         if (unitPrice < 0) return Results.BadRequest(new { code = "INVALID_PRICE", message = "Цена позиции не может быть отрицательной." });
-        order.Items.Add(new OrderItem { ProductId = variant.ProductId, ProductVariantId = variant.Id, ProductNameSnapshot = variant.Product.Name, VariantNameSnapshot = variant.Name, BasePrice = variant.Price, Quantity = item.Quantity, UnitPrice = unitPrice, TotalPrice = unitPrice * item.Quantity });
+        var orderItem = new OrderItem { ProductId = variant.ProductId, ProductVariantId = variant.Id, ProductNameSnapshot = variant.Product.Name, VariantNameSnapshot = variant.Name, BasePrice = variant.Price, Quantity = item.Quantity, UnitPrice = unitPrice, TotalPrice = unitPrice * item.Quantity };
+        orderItem.Modifiers = modifiers.Select(modifier => new OrderItemModifier { ModifierNameSnapshot = modifier.Name, PriceAdjustmentSnapshot = ModifierPrices.Values[modifier.Name], Quantity = modifier.Quantity }).ToList();
+        order.Items.Add(orderItem);
     }
     order.TotalAmount = order.Items.Sum(item => item.TotalPrice);
     if (order.TotalAmount <= 0 || dto.Payments.Sum(payment => payment.Amount) != order.TotalAmount)
@@ -187,7 +195,7 @@ app.MapGet("/api/orders", async (HttpRequest request, AppDbContext db, TelegramA
 {
     var user = await auth.AuthenticateAsync(request, db, ct);
     if (user is null) return Results.Unauthorized();
-    var orders = await db.Orders.AsNoTracking().Include(order => order.Items).Include(order => order.Payments)
+    var orders = await db.Orders.AsNoTracking().Include(order => order.Items).ThenInclude(item => item.Modifiers).Include(order => order.Payments)
         .Where(order => order.UserId == user.Id).OrderByDescending(order => order.CreatedAt).Take(200).ToListAsync(ct);
     return Results.Ok(orders.Select(OrderDto));
 });
@@ -223,11 +231,23 @@ app.Run();
 
 static object UserDto(CoffeeControl.Api.User user) => new { id = user.Id, user.FirstName, user.LastName, user.Username, user.Role };
 static object ShiftDto(Shift shift) => new { id = shift.Id, shift.BusinessDate, shift.OpenedAt, shift.ClosedAt, shift.OpeningCash, shift.ExpectedClosingCash, shift.ActualClosingCash, shift.CashDifference, shift.Status, shift.Comment };
-static object OrderDto(Order order) => new { id = order.Id, order.Number, order.TotalAmount, order.CreatedAt, status = order.Status.ToString(), payments = order.Payments.Select(payment => new { method = payment.PaymentMethod.ToString(), payment.Amount }), items = order.Items.Select(item => new { name = item.ProductNameSnapshot, variant = item.VariantNameSnapshot, item.Quantity, item.UnitPrice, item.TotalPrice }) };
+static object OrderDto(Order order) => new { id = order.Id, order.Number, order.TotalAmount, order.CreatedAt, status = order.Status.ToString(), payments = order.Payments.Select(payment => new { method = payment.PaymentMethod.ToString(), payment.Amount }), items = order.Items.Select(item => new { name = item.ProductNameSnapshot, variant = item.VariantNameSnapshot, item.Quantity, item.UnitPrice, item.TotalPrice, modifiers = item.Modifiers.Select(modifier => new { name = modifier.ModifierNameSnapshot, modifier.Quantity }) }) };
 
 public record OpenShiftDto(decimal OpeningCash);
 public record CloseShiftDto(decimal ActualCash, string? Comment);
-public record CreateItemDto(Guid VariantId, int Quantity, decimal ModifierAmount = 0);
+public record CreateItemDto(Guid VariantId, int Quantity, decimal ModifierAmount = 0, List<CreateModifierDto>? Modifiers = null);
+public record CreateModifierDto(string Name, int Quantity = 1);
 public record CreatePaymentDto(PaymentMethod Method, decimal Amount);
 public record CreateOrderDto(string RequestId, List<CreateItemDto> Items, List<CreatePaymentDto> Payments);
 public partial class Program { }
+
+static class ModifierPrices
+{
+    public static readonly IReadOnlyDictionary<string, decimal> Values = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Сироп"] = 15m,
+        ["Растительное молоко"] = 45m,
+        ["Без кофеина"] = 15m
+    };
+    public static bool ContainsKey(string name) => Values.ContainsKey(name);
+}
