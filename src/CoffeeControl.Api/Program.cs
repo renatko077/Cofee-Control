@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Globalization;
 using CoffeeControl.Api;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
@@ -245,6 +246,27 @@ app.MapGet("/api/analytics", async (string? period, string? date, HttpRequest re
     });
 });
 
+app.MapPost("/api/reports/daily/send", async (HttpRequest request, AppDbContext db, TelegramAuth auth, SendDailyReportDto dto, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (bot is null) return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Бот временно недоступен", detail: "Не настроен TELEGRAM_BOT_TOKEN.");
+    if (!DateOnly.TryParse(dto.Date, out var reportDate) || string.IsNullOrWhiteSpace(dto.PdfBase64) || dto.PdfBase64.Length > 8_000_000)
+        return Results.BadRequest(new { code = "INVALID_REPORT", message = "Не удалось сформировать отчёт. Попробуйте ещё раз." });
+    byte[] bytes;
+    try { bytes = Convert.FromBase64String(dto.PdfBase64); }
+    catch (FormatException) { return Results.BadRequest(new { code = "INVALID_PDF", message = "Получен некорректный PDF." }); }
+    if (bytes.Length is < 5 or > 5_000_000 || !bytes.AsSpan(0, 5).SequenceEqual("%PDF-"u8))
+        return Results.BadRequest(new { code = "INVALID_PDF", message = "Получен некорректный PDF." });
+    var culture = CultureInfo.GetCultureInfo("ru-RU");
+    var dateLabel = reportDate.ToString("dd MMMM yyyy", culture);
+    var month = culture.DateTimeFormat.GetMonthName(reportDate.Month);
+    var fileName = $"Отчет-{reportDate:dd}-{month}-{reportDate:yyyy}.pdf";
+    await using var stream = new MemoryStream(bytes, writable: false);
+    await bot.SendDocument(user.TelegramId, InputFile.FromStream(stream, fileName), caption: $"Дневной отчёт за {dateLabel}", cancellationToken: ct);
+    return Results.Ok(new { sent = true, fileName });
+});
+
 app.MapFallbackToFile("index.html");
 app.Run();
 
@@ -258,6 +280,7 @@ public record CreateItemDto(Guid VariantId, int Quantity, decimal ModifierAmount
 public record CreateModifierDto(string Name, int Quantity = 1);
 public record CreatePaymentDto(PaymentMethod Method, decimal Amount);
 public record CreateOrderDto(string RequestId, List<CreateItemDto> Items, List<CreatePaymentDto> Payments);
+public record SendDailyReportDto(string Date, string PdfBase64);
 public partial class Program { }
 
 static class ModifierPrices
