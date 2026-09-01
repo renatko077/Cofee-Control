@@ -119,8 +119,6 @@ public static class DbSeeder
                 else
                     product.Variants.Add(new ProductVariant { Name = item.Variant, VolumeMl = item.Volume, Price = item.Price, IsDefault = product.Variants.Count == 0 });
             }
-            product.IsActive = true;
-            product.IsQuickOrder = item.Quick;
         }
 
         await db.SaveChangesAsync(ct);

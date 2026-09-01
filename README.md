@@ -18,7 +18,7 @@
 
 `DATABASE_URL` — Railway PostgreSQL URL (`postgresql://...`) или обычная Npgsql connection string.
 
-`TELEGRAM_BOT_TOKEN` — token от BotFather. `TELEGRAM_BOT_USERNAME` — username бота. `TELEGRAM_WEBAPP_URL` — публичный HTTPS URL приложения. `ADMIN_TELEGRAM_IDS` — Telegram ID администраторов через запятую. `ASPNETCORE_ENVIRONMENT=Production`. `BUSINESS_TIME_ZONE` — часовой пояс бизнес-дня (по умолчанию `Europe/Vilnius`). Опционально: `APP_BASE_URL`, `LOG_LEVEL`.
+`TELEGRAM_BOT_TOKEN` — token от BotFather. `TELEGRAM_BOT_USERNAME` — username бота. `TELEGRAM_WEBAPP_URL` — публичный HTTPS URL приложения. `ADMIN_TELEGRAM_ID` — единственный Telegram ID владельца, которому доступен административный раздел (старый `ADMIN_TELEGRAM_IDS` также поддерживается). `ASPNETCORE_ENVIRONMENT=Production`. `BUSINESS_TIME_ZONE` — часовой пояс бизнес-дня (по умолчанию `Europe/Vilnius`). Опционально: `APP_BASE_URL`, `LOG_LEVEL`.
 
 ## BotFather
 
@@ -42,7 +42,7 @@ EF Core выполняет `Database.MigrateAsync()` при старте. Для
 
 ## API и безопасность
 
-Frontend передаёт `X-Telegram-Init-Data`; backend проверяет HMAC по официальному алгоритму Telegram, создаёт пользователя и назначает Admin только по `ADMIN_TELEGRAM_IDS`. Цены frontend не доверяются: заказ передаёт только variant IDs, итог рассчитывается из PostgreSQL. `RequestId` защищает от double submit.
+Frontend передаёт `X-Telegram-Init-Data`; backend проверяет HMAC по официальному алгоритму Telegram, создаёт пользователя и назначает Admin только по `ADMIN_TELEGRAM_ID` (либо совместимому старому `ADMIN_TELEGRAM_IDS`). Цены frontend не доверяются: заказ передаёт только variant IDs, итог рассчитывается из PostgreSQL. `RequestId` защищает от double submit.
 
 ## Ограничения MVP
 

@@ -267,12 +267,136 @@ app.MapPost("/api/reports/daily/send", async (HttpRequest request, AppDbContext 
     return Results.Ok(new { sent = true, fileName });
 });
 
+app.MapGet("/api/admin/catalog", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.Json(new { code = "ADMIN_ONLY", message = "Раздел доступен только владельцу." }, statusCode: StatusCodes.Status403Forbidden);
+    var products = await db.Products.AsNoTracking().OrderBy(product => product.Category.SortOrder).ThenBy(product => product.SortOrder)
+        .Select(product => new
+        {
+            id = product.Id, product.Name, category = product.Category.Name, icon = product.Category.Icon,
+            quick = product.IsQuickOrder, active = product.IsActive,
+            variants = product.Variants.OrderByDescending(variant => variant.IsDefault).Select(variant => new
+            {
+                id = variant.Id, variant.Name, variant.Price, variant.VolumeMl, active = variant.IsActive
+            })
+        }).ToListAsync(ct);
+    return Results.Ok(new
+    {
+        products,
+        categories = await db.Categories.AsNoTracking().Where(category => category.IsActive).OrderBy(category => category.SortOrder).Select(category => new { category.Name, category.Icon }).ToListAsync(ct),
+        activeCount = products.Count(product => product.active),
+        hiddenCount = products.Count(product => !product.active)
+    });
+});
+
+app.MapPost("/api/admin/products", async (HttpRequest request, AppDbContext db, TelegramAuth auth, AdminProductDto dto, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.Json(new { code = "ADMIN_ONLY", message = "Раздел доступен только владельцу." }, statusCode: StatusCodes.Status403Forbidden);
+    var validation = ValidateAdminProduct(dto.Name, dto.Category, dto.VariantName, dto.Price);
+    if (validation is not null) return Results.BadRequest(new { code = "INVALID_PRODUCT", message = validation });
+    var categoryName = dto.Category.Trim();
+    var category = await db.Categories.FirstOrDefaultAsync(item => item.Name.ToLower() == categoryName.ToLower(), ct);
+    if (category is null)
+    {
+        category = new ProductCategory { Name = categoryName, Icon = string.IsNullOrWhiteSpace(dto.Icon) ? "☕" : dto.Icon.Trim(), SortOrder = (await db.Categories.MaxAsync(item => (int?)item.SortOrder, ct) ?? 0) + 1 };
+        db.Categories.Add(category);
+    }
+    var product = new Product
+    {
+        Name = dto.Name.Trim(), Category = category, IsQuickOrder = dto.Quick, IsActive = true,
+        SortOrder = (await db.Products.Where(item => item.CategoryId == category.Id).MaxAsync(item => (int?)item.SortOrder, ct) ?? -1) + 1
+    };
+    product.Variants.Add(new ProductVariant { Name = dto.VariantName.Trim(), Price = dto.Price, VolumeMl = dto.VolumeMl, IsDefault = true, IsActive = true });
+    db.Products.Add(product);
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new { id = product.Id, message = "Позиция добавлена." });
+});
+
+app.MapPut("/api/admin/products/{id:guid}", async (Guid id, HttpRequest request, AppDbContext db, TelegramAuth auth, AdminProductDto dto, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.Json(new { code = "ADMIN_ONLY", message = "Раздел доступен только владельцу." }, statusCode: StatusCodes.Status403Forbidden);
+    var validation = ValidateAdminProduct(dto.Name, dto.Category, dto.VariantName, dto.Price);
+    if (validation is not null) return Results.BadRequest(new { code = "INVALID_PRODUCT", message = validation });
+    var product = await db.Products.Include(item => item.Category).Include(item => item.Variants).SingleOrDefaultAsync(item => item.Id == id, ct);
+    if (product is null) return Results.NotFound(new { code = "PRODUCT_NOT_FOUND", message = "Позиция не найдена." });
+    var categoryName = dto.Category.Trim();
+    var category = await db.Categories.FirstOrDefaultAsync(item => item.Name.ToLower() == categoryName.ToLower(), ct);
+    if (category is null)
+    {
+        category = new ProductCategory { Name = categoryName, Icon = string.IsNullOrWhiteSpace(dto.Icon) ? "☕" : dto.Icon.Trim(), SortOrder = (await db.Categories.MaxAsync(item => (int?)item.SortOrder, ct) ?? 0) + 1 };
+        db.Categories.Add(category);
+    }
+    else if (!string.IsNullOrWhiteSpace(dto.Icon)) category.Icon = dto.Icon.Trim();
+    var variant = dto.VariantId is not null ? product.Variants.FirstOrDefault(item => item.Id == dto.VariantId) : product.Variants.OrderByDescending(item => item.IsDefault).FirstOrDefault();
+    if (variant is null)
+    {
+        variant = new ProductVariant { Product = product, IsDefault = true };
+        product.Variants.Add(variant);
+    }
+    product.Name = dto.Name.Trim(); product.Category = category; product.IsQuickOrder = dto.Quick; product.IsActive = dto.Active;
+    variant.Name = dto.VariantName.Trim(); variant.Price = dto.Price; variant.VolumeMl = dto.VolumeMl; variant.IsActive = dto.Active;
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new { message = "Изменения сохранены." });
+});
+
+app.MapDelete("/api/admin/products/{id:guid}", async (Guid id, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.Json(new { code = "ADMIN_ONLY", message = "Раздел доступен только владельцу." }, statusCode: StatusCodes.Status403Forbidden);
+    var product = await db.Products.Include(item => item.Variants).SingleOrDefaultAsync(item => item.Id == id, ct);
+    if (product is null) return Results.NotFound(new { code = "PRODUCT_NOT_FOUND", message = "Позиция не найдена." });
+    product.IsActive = false; product.IsQuickOrder = false;
+    foreach (var variant in product.Variants) variant.IsActive = false;
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new { message = "Позиция скрыта из продажи. История заказов сохранена." });
+});
+
+app.MapGet("/api/admin/history/{date}", async (string date, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.Json(new { code = "ADMIN_ONLY", message = "Раздел доступен только владельцу." }, statusCode: StatusCodes.Status403Forbidden);
+    if (!DateOnly.TryParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var businessDate))
+        return Results.BadRequest(new { code = "INVALID_DATE", message = "Выберите корректную дату." });
+    var shifts = db.Shifts.AsNoTracking().Where(shift => shift.BusinessDate == businessDate);
+    var orders = db.Orders.AsNoTracking().Where(order => order.Shift.BusinessDate == businessDate);
+    return Results.Ok(new
+    {
+        date = businessDate, shifts = await shifts.CountAsync(ct), openShifts = await shifts.CountAsync(shift => shift.Status == ShiftStatus.Open, ct),
+        orders = await orders.CountAsync(ct), revenue = await orders.Where(order => order.Status == OrderStatus.Completed).SumAsync(order => (decimal?)order.TotalAmount, ct) ?? 0,
+        writeOffs = await db.WriteOffs.AsNoTracking().CountAsync(item => shifts.Select(shift => shift.Id).Contains(item.ShiftId), ct)
+    });
+});
+
+app.MapPost("/api/admin/history/{date}/delete", async (string date, HttpRequest request, AppDbContext db, TelegramAuth auth, DeleteHistoryDto dto, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.Json(new { code = "ADMIN_ONLY", message = "Раздел доступен только владельцу." }, statusCode: StatusCodes.Status403Forbidden);
+    if (!DateOnly.TryParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var businessDate) || dto.Confirmation != date)
+        return Results.BadRequest(new { code = "CONFIRMATION_REQUIRED", message = "Для удаления подтвердите выбранную дату." });
+    var deleted = await db.Shifts.Where(shift => shift.BusinessDate == businessDate).ExecuteDeleteAsync(ct);
+    return Results.Ok(new { deletedShifts = deleted, message = deleted == 0 ? "За выбранный день данных не было." : "История выбранного дня удалена." });
+});
+
 app.MapFallbackToFile("index.html");
 app.Run();
 
 static object UserDto(CoffeeControl.Api.User user) => new { id = user.Id, user.FirstName, user.LastName, user.Username, user.Role };
 static object ShiftDto(Shift shift) => new { id = shift.Id, shift.BusinessDate, shift.OpenedAt, shift.ClosedAt, shift.OpeningCash, shift.ExpectedClosingCash, shift.ActualClosingCash, shift.CashDifference, shift.Status, shift.Comment };
 static object OrderDto(Order order) => new { id = order.Id, order.Number, order.TotalAmount, order.CreatedAt, status = order.Status.ToString(), payments = order.Payments.Select(payment => new { method = payment.PaymentMethod.ToString(), payment.Amount }), items = order.Items.Select(item => new { name = item.ProductNameSnapshot, variant = item.VariantNameSnapshot, item.Quantity, item.CoffeePortions, item.DecafPackets, item.UnitPrice, item.TotalPrice, modifiers = item.Modifiers.Select(modifier => new { name = modifier.ModifierNameSnapshot, modifier.Quantity }) }) };
+static string? ValidateAdminProduct(string? name, string? category, string? variantName, decimal price) =>
+    string.IsNullOrWhiteSpace(name) || name.Trim().Length > 100 ? "Укажите название позиции до 100 символов." :
+    string.IsNullOrWhiteSpace(category) || category.Trim().Length > 60 ? "Укажите категорию до 60 символов." :
+    string.IsNullOrWhiteSpace(variantName) || variantName.Trim().Length > 60 ? "Укажите название размера или варианта." :
+    price is < 0 or > 1_000_000 ? "Укажите корректную цену." : null;
 
 public record OpenShiftDto(decimal OpeningCash);
 public record CloseShiftDto(decimal ActualCash, string? Comment);
@@ -281,6 +405,8 @@ public record CreateModifierDto(string Name, int Quantity = 1);
 public record CreatePaymentDto(PaymentMethod Method, decimal Amount);
 public record CreateOrderDto(string RequestId, List<CreateItemDto> Items, List<CreatePaymentDto> Payments);
 public record SendDailyReportDto(string Date, string PdfBase64);
+public record AdminProductDto(string Name, string Category, string? Icon, string VariantName, decimal Price, int? VolumeMl, bool Quick, bool Active = true, Guid? VariantId = null);
+public record DeleteHistoryDto(string Confirmation);
 public partial class Program { }
 
 static class ModifierPrices
