@@ -40,6 +40,20 @@ app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
     await context.Response.WriteAsJsonAsync(new { code = "SERVER_ERROR", message = "Не удалось выполнить операцию. Попробуйте ещё раз.", traceId = context.TraceIdentifier });
 }));
 app.UseDefaultFiles();
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        if (context.Response.ContentType?.StartsWith("text/html", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+            context.Response.Headers.Pragma = "no-cache";
+            context.Response.Headers.Expires = "0";
+        }
+        return Task.CompletedTask;
+    });
+    await next();
+});
 app.UseStaticFiles();
 app.UseCors();
 

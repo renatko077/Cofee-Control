@@ -1,8 +1,12 @@
 import React,{useCallback,useEffect,useMemo,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {ArrowLeft,ArrowRight,BarChart3,Check,Clock,Coffee,Download,Eye,Minus,MoreHorizontal,Package,Plus,RefreshCw,Save,ShieldCheck,ShoppingBag,Trash2,Wallet,X} from 'lucide-react';
+import pdfMake from 'pdfmake/build/pdfmake';
+import pdfFonts from 'pdfmake/build/vfs_fonts';
 import './style.css';
 import './enhancements.css';
+
+(pdfMake as any).addVirtualFileSystem(pdfFonts);
 
 type Variant={id:string,name:string,price:number,volumeMl?:number};
 type Product={id:string,name:string,category:string,icon?:string,quick:boolean,variants:Variant[]};
@@ -43,8 +47,6 @@ const emptyProduct:ProductDraft={name:'',category:'Кофе',icon:'☕',variantN
 const draftFromProduct=(product:AdminProduct):ProductDraft=>{const variant=product.variants[0];return{name:product.name,category:product.category,icon:product.icon||'☕',variantName:variant?.name||'Стандарт',price:String(variant?.price??0),volumeMl:variant?.volumeMl?String(variant.volumeMl):'',quick:product.quick,active:product.active,variantId:variant?.id}};
 
 const createDailyPdf=async(report:Analytics,date:string)=>{
- const [{default:pdfMake},{default:pdfFonts}]=await Promise.all([import('pdfmake/build/pdfmake'),import('pdfmake/build/vfs_fonts')]);
- (pdfMake as any).addVirtualFileSystem(pdfFonts);
  const rows=report.positions.length?report.positions.map((position,index)=>[{text:String(index+1),alignment:'center'},{text:position.name},{text:String(position.quantity),alignment:'center',bold:true}]):[[{text:'Продаж за этот день нет',colSpan:3,alignment:'center',color:'#978b82'}, {}, {}]];
  const definition:any={pageSize:'A4',pageMargins:[42,44,42,44],defaultStyle:{font:'Roboto',fontSize:10,color:'#29211d'},content:[{columns:[{stack:[{text:'COFFEE CONTROL',fontSize:10,bold:true,color:'#8a6044',characterSpacing:1.5},{text:'Дневной отчёт',fontSize:24,bold:true,margin:[0,5,0,3]},{text:reportDateLabel(date),color:'#756a63'}]},{text:'DAY REPORT',fontSize:9,bold:true,alignment:'right',color:'#8a6044',characterSpacing:1.2}],margin:[0,0,0,24]},{table:{widths:['*','*','*','*'],body:[[{text:'Чашки',style:'metricLabel'},{text:'Порции кофе',style:'metricLabel'},{text:'Гриндер',style:'metricLabel'},{text:'Без кофеина',style:'metricLabel'}],[{text:String(report.cups),style:'metricValue'},{text:String(report.coffeePortions),style:'metricValue'},{text:String(report.grinderPortions),style:'metricValue'},{text:String(report.decafCoffees),style:'metricValue'}]]},layout:{fillColor:(row:number)=>row===0?'#f1e8e1':'#fbf8f5',hLineColor:()=> '#e2d6cd',vLineColor:()=> '#e2d6cd',paddingTop:()=>10,paddingBottom:()=>10,paddingLeft:()=>8,paddingRight:()=>8},margin:[0,0,0,24]},{text:'Купленные позиции',fontSize:16,bold:true,margin:[0,0,0,10]},{table:{headerRows:1,widths:[28,'*',58],body:[[{text:'№',style:'tableHeader',alignment:'center'},{text:'Позиция',style:'tableHeader'},{text:'Кол-во',style:'tableHeader',alignment:'center'}],...rows]},layout:{fillColor:(row:number)=>row===0?'#6f4e37':row%2===0?'#faf6f2':null,hLineColor:()=> '#e8ded6',vLineColor:()=> '#e8ded6',paddingTop:()=>8,paddingBottom:()=>8,paddingLeft:()=>8,paddingRight:()=>8},margin:[0,0,0,22]},{text:'Оплата',fontSize:16,bold:true,margin:[0,0,0,10]},{table:{widths:['*','*','*'],body:[[{text:'Наличные',style:'metricLabel'},{text:'Карта',style:'metricLabel'},{text:'Выручка',style:'metricLabel'}],[{text:amount(report.cash),style:'paymentValue'},{text:amount(report.card),style:'paymentValue'},{text:amount(report.revenue),style:'paymentValue'}]]},layout:{fillColor:(row:number)=>row===0?'#f1e8e1':'#fbf8f5',hLineColor:()=> '#e2d6cd',vLineColor:()=> '#e2d6cd',paddingTop:()=>9,paddingBottom:()=>9,paddingLeft:()=>8,paddingRight:()=>8},margin:[0,0,0,16]},{text:`Заказов: ${report.ordersCount}`,color:'#756a63'}],footer:(currentPage:number,pageCount:number)=>({columns:[{text:'Coffee Control',color:'#a1948b'},{text:`${currentPage} / ${pageCount}`,alignment:'right',color:'#a1948b'}],fontSize:8,margin:[42,0,42,20]}),styles:{metricLabel:{fontSize:8,bold:true,color:'#756a63',alignment:'center'},metricValue:{fontSize:20,bold:true,color:'#6f4e37',alignment:'center'},paymentValue:{fontSize:14,bold:true,color:'#6f4e37',alignment:'center'},tableHeader:{bold:true,color:'#ffffff'}}};
  return {pdfMake,definition};
