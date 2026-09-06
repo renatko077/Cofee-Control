@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using Telegram.Bot;
+using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.ReplyMarkups;
 
@@ -57,17 +58,10 @@ var webAppUrl = builder.Configuration["TELEGRAM_WEBAPP_URL"]
     ?? builder.Configuration["APP_BASE_URL"]
     ?? (string.IsNullOrWhiteSpace(railwayDomain) ? null : $"https://{railwayDomain}");
 var bot = string.IsNullOrWhiteSpace(botToken) ? null : new TelegramBotClient(botToken);
-if (bot is not null && !string.IsNullOrWhiteSpace(webAppUrl))
-{
-    var webhookUrl = $"{webAppUrl.TrimEnd('/')}/telegram/webhook";
-    await bot.SetWebhook(webhookUrl, dropPendingUpdates: true);
-    var webhookInfo = await bot.GetWebhookInfo();
-    app.Logger.LogInformation("Telegram webhook configured: {WebhookUrl}; pending updates: {PendingUpdates}; last error: {LastError}", webhookInfo.Url, webhookInfo.PendingUpdateCount, webhookInfo.LastErrorMessage);
-}
 
-app.MapPost("/telegram/webhook", async (Update update, CancellationToken ct) =>
+async Task HandleTelegramUpdate(Update update, CancellationToken ct)
 {
-    if (bot is null || update.Message is null) return Results.Ok();
+    if (bot is null || update.Message is null) return;
     var chatId = update.Message.Chat.Id;
     app.Logger.LogInformation("Telegram update received for chat {ChatId}; hasContact={HasContact}, hasText={HasText}", chatId, update.Message.Contact is not null, update.Message.Text is not null);
     if (update.Message.Contact is not null)
@@ -75,8 +69,8 @@ app.MapPost("/telegram/webhook", async (Update update, CancellationToken ct) =>
         var contact = update.Message.Contact;
         if (contact.UserId != chatId)
         {
-            await bot.SendMessage(chatId, "Пожалуйста, отправьте именно свой номер через кнопку ниже.");
-            return Results.Ok();
+            await bot.SendMessage(chatId, "Пожалуйста, отправьте именно свой номер через кнопку ниже.", cancellationToken: ct);
+            return;
         }
         using var scope = app.Services.CreateScope();
         var auth = scope.ServiceProvider.GetRequiredService<TelegramAuth>();
@@ -84,22 +78,42 @@ app.MapPost("/telegram/webhook", async (Update update, CancellationToken ct) =>
         var user = await auth.AuthorizeContactAsync(db, chatId, update.Message.From?.Username, update.Message.From?.FirstName ?? "Бариста", contact.PhoneNumber, ct);
         if (user is null)
         {
-            await bot.SendMessage(chatId, "Доступ закрыт. Ваш номер не найден в списке разрешённых.");
-            return Results.Ok();
+            await bot.SendMessage(chatId, "Доступ закрыт. Ваш номер не найден в списке разрешённых.", cancellationToken: ct);
+            return;
         }
         var accessMarkup = string.IsNullOrWhiteSpace(webAppUrl) ? null : new InlineKeyboardMarkup(InlineKeyboardButton.WithWebApp("☕ Открыть кофейню", new WebAppInfo { Url = webAppUrl }));
-        await bot.SendMessage(chatId, "✅ Номер подтверждён. Доступ к кофейне открыт.", replyMarkup: accessMarkup);
-        return Results.Ok();
+        await bot.SendMessage(chatId, "✅ Номер подтверждён. Доступ к кофейне открыт.", replyMarkup: accessMarkup, cancellationToken: ct);
+        return;
     }
-    if (update.Message.Text is null) return Results.Ok();
+    if (update.Message.Text is null) return;
     var text = update.Message.Text.Trim();
     if (text.StartsWith("/start") || text.StartsWith("/app"))
     {
         var markup = new ReplyKeyboardMarkup(new[] { new KeyboardButton("📱 Поделиться номером") { RequestContact = true } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
-        await bot.SendMessage(chatId, "Чтобы получить доступ к кофейне, поделитесь своим номером телефона кнопкой ниже.", replyMarkup: markup);
+        await bot.SendMessage(chatId, "Чтобы получить доступ к кофейне, поделитесь своим номером телефона кнопкой ниже.", replyMarkup: markup, cancellationToken: ct);
     }
     else if (text.StartsWith("/help"))
-        await bot.SendMessage(chatId, "/start — открыть Coffee Control\n/app — открыть приложение\n/help — помощь");
+        await bot.SendMessage(chatId, "/start — открыть Coffee Control\n/app — открыть приложение\n/help — помощь", cancellationToken: ct);
+}
+
+if (bot is not null)
+{
+    await bot.DeleteWebhook(dropPendingUpdates: true);
+    bot.StartReceiving(
+        (_, update, ct) => HandleTelegramUpdate(update, ct),
+        (_, exception, ct) =>
+        {
+            app.Logger.LogError(exception, "Telegram polling error");
+            return Task.CompletedTask;
+        },
+        new ReceiverOptions { AllowedUpdates = [] },
+        app.Lifetime.ApplicationStopping);
+    app.Logger.LogInformation("Telegram bot started in long polling mode");
+}
+
+app.MapPost("/telegram/webhook", async (Update update, CancellationToken ct) =>
+{
+    await HandleTelegramUpdate(update, ct);
     return Results.Ok();
 });
 

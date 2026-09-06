@@ -26,7 +26,7 @@
 2. Скопируйте token в Railway variable `TELEGRAM_BOT_TOKEN`.
 3. В `/setmenubutton` выберите бота, задайте текст `Открыть кофейню` и URL Railway.
 4. В `/setcommands` добавьте `start - открыть Coffee Control`, `app - открыть приложение`, `help - помощь`.
-5. URL должен быть HTTPS и совпадать с `TELEGRAM_WEBAPP_URL`.
+5. URL должен быть HTTPS и совпадать с `TELEGRAM_WEBAPP_URL`. Команды бот получает через long polling, поэтому отдельная настройка webhook не требуется.
 
 ## Railway
 
