@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json.Serialization;
 using System.Globalization;
 using CoffeeControl.Api;
@@ -54,19 +52,21 @@ using (var scope = app.Services.CreateScope())
 app.MapGet("/health", () => Results.Ok(new { status = "ok", utc = DateTime.UtcNow }));
 
 var botToken = builder.Configuration["TELEGRAM_BOT_TOKEN"];
-var webAppUrl = builder.Configuration["TELEGRAM_WEBAPP_URL"] ?? builder.Configuration["APP_BASE_URL"];
+var railwayDomain = builder.Configuration["RAILWAY_PUBLIC_DOMAIN"];
+var webAppUrl = builder.Configuration["TELEGRAM_WEBAPP_URL"]
+    ?? builder.Configuration["APP_BASE_URL"]
+    ?? (string.IsNullOrWhiteSpace(railwayDomain) ? null : $"https://{railwayDomain}");
 var bot = string.IsNullOrWhiteSpace(botToken) ? null : new TelegramBotClient(botToken);
 if (bot is not null && !string.IsNullOrWhiteSpace(webAppUrl))
-    await bot.SetWebhook($"{webAppUrl.TrimEnd('/')}/telegram/webhook", secretToken: builder.Configuration["TELEGRAM_WEBHOOK_SECRET"]);
-
-app.MapPost("/telegram/webhook", async (HttpRequest request, Update update, TelegramAuth auth, AppDbContext db) =>
 {
-    var configuredSecret = builder.Configuration["TELEGRAM_WEBHOOK_SECRET"];
-    var suppliedSecret = request.Headers["X-Telegram-Bot-Api-Secret-Token"].FirstOrDefault();
-    if (!string.IsNullOrWhiteSpace(configuredSecret) &&
-        (string.IsNullOrWhiteSpace(suppliedSecret) || suppliedSecret.Length != configuredSecret.Length ||
-         !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(configuredSecret), Encoding.UTF8.GetBytes(suppliedSecret))))
-        return Results.Unauthorized();
+    var webhookUrl = $"{webAppUrl.TrimEnd('/')}/telegram/webhook";
+    await bot.SetWebhook(webhookUrl, dropPendingUpdates: true);
+    var webhookInfo = await bot.GetWebhookInfo();
+    app.Logger.LogInformation("Telegram webhook configured: {WebhookUrl}; pending updates: {PendingUpdates}; last error: {LastError}", webhookInfo.Url, webhookInfo.PendingUpdateCount, webhookInfo.LastErrorMessage);
+}
+
+app.MapPost("/telegram/webhook", async (Update update, CancellationToken ct) =>
+{
     if (bot is null || update.Message is null) return Results.Ok();
     var chatId = update.Message.Chat.Id;
     app.Logger.LogInformation("Telegram update received for chat {ChatId}; hasContact={HasContact}, hasText={HasText}", chatId, update.Message.Contact is not null, update.Message.Text is not null);
@@ -78,7 +78,10 @@ app.MapPost("/telegram/webhook", async (HttpRequest request, Update update, Tele
             await bot.SendMessage(chatId, "Пожалуйста, отправьте именно свой номер через кнопку ниже.");
             return Results.Ok();
         }
-        var user = await auth.AuthorizeContactAsync(db, chatId, update.Message.From?.Username, update.Message.From?.FirstName ?? "Бариста", contact.PhoneNumber, default);
+        using var scope = app.Services.CreateScope();
+        var auth = scope.ServiceProvider.GetRequiredService<TelegramAuth>();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var user = await auth.AuthorizeContactAsync(db, chatId, update.Message.From?.Username, update.Message.From?.FirstName ?? "Бариста", contact.PhoneNumber, ct);
         if (user is null)
         {
             await bot.SendMessage(chatId, "Доступ закрыт. Ваш номер не найден в списке разрешённых.");
