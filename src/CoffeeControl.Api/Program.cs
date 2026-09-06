@@ -59,7 +59,7 @@ var bot = string.IsNullOrWhiteSpace(botToken) ? null : new TelegramBotClient(bot
 if (bot is not null && !string.IsNullOrWhiteSpace(webAppUrl) && !app.Environment.IsDevelopment())
     await bot.SetWebhook($"{webAppUrl.TrimEnd('/')}/telegram/webhook", secretToken: builder.Configuration["TELEGRAM_WEBHOOK_SECRET"]);
 
-app.MapPost("/telegram/webhook", async (HttpRequest request, Update update) =>
+app.MapPost("/telegram/webhook", async (HttpRequest request, Update update, TelegramAuth auth, AppDbContext db) =>
 {
     var configuredSecret = builder.Configuration["TELEGRAM_WEBHOOK_SECRET"];
     var suppliedSecret = request.Headers["X-Telegram-Bot-Api-Secret-Token"].FirstOrDefault();
@@ -67,13 +67,32 @@ app.MapPost("/telegram/webhook", async (HttpRequest request, Update update) =>
         (string.IsNullOrWhiteSpace(suppliedSecret) || suppliedSecret.Length != configuredSecret.Length ||
          !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(configuredSecret), Encoding.UTF8.GetBytes(suppliedSecret))))
         return Results.Unauthorized();
-    if (bot is null || update.Message?.Text is null) return Results.Ok();
+    if (bot is null || update.Message is null) return Results.Ok();
     var chatId = update.Message.Chat.Id;
+    if (update.Message.Contact is not null)
+    {
+        var contact = update.Message.Contact;
+        if (contact.UserId != chatId)
+        {
+            await bot.SendMessage(chatId, "Пожалуйста, отправьте именно свой номер через кнопку ниже.");
+            return Results.Ok();
+        }
+        var user = await auth.AuthorizeContactAsync(db, chatId, update.Message.From?.Username, update.Message.From?.FirstName ?? "Бариста", contact.PhoneNumber, default);
+        if (user is null)
+        {
+            await bot.SendMessage(chatId, "Доступ закрыт. Ваш номер не найден в списке разрешённых.");
+            return Results.Ok();
+        }
+        var accessMarkup = string.IsNullOrWhiteSpace(webAppUrl) ? null : new InlineKeyboardMarkup(InlineKeyboardButton.WithWebApp("☕ Открыть кофейню", new WebAppInfo { Url = webAppUrl }));
+        await bot.SendMessage(chatId, "✅ Номер подтверждён. Доступ к кофейне открыт.", replyMarkup: accessMarkup);
+        return Results.Ok();
+    }
+    if (update.Message.Text is null) return Results.Ok();
     var text = update.Message.Text.Trim();
     if (text.StartsWith("/start") || text.StartsWith("/app"))
     {
-        var markup = string.IsNullOrWhiteSpace(webAppUrl) ? null : new InlineKeyboardMarkup(InlineKeyboardButton.WithWebApp("☕ Открыть кофейню", new WebAppInfo { Url = webAppUrl }));
-        await bot.SendMessage(chatId, "☕ Coffee Control\n\nКасса и смены вашей кофейни в одном приложении.", replyMarkup: markup);
+        var markup = new ReplyKeyboardMarkup(new[] { new KeyboardButton("📱 Поделиться номером") { RequestContact = true } }) { ResizeKeyboard = true, OneTimeKeyboard = true };
+        await bot.SendMessage(chatId, "Чтобы получить доступ к кофейне, поделитесь своим номером телефона кнопкой ниже.", replyMarkup: markup);
     }
     else if (text.StartsWith("/help"))
         await bot.SendMessage(chatId, "/start — открыть Coffee Control\n/app — открыть приложение\n/help — помощь");
