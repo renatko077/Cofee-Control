@@ -154,12 +154,12 @@ app.MapGet("/api/dashboard", async (HttpRequest request, AppDbContext db, Telegr
         .Include(item => item.Orders).ThenInclude(order => order.Items).ThenInclude(item => item.Modifiers)
         .Where(item => item.UserId == user.Id && item.Status == ShiftStatus.Open)
         .OrderByDescending(item => item.OpenedAt).FirstOrDefaultAsync(ct);
-    if (shift is null) return Results.Ok(new { me = UserDto(user), currentShift = (object?)null, revenue = 0m, ordersCount = 0, cash = 0m, card = 0m, averageCheck = 0m, recentOrders = Array.Empty<object>() });
+    if (shift is null) return Results.Ok(new { me = UserDto(user), currentShift = (object?)null, revenue = 0m, ordersCount = 0, cash = 0m, card = 0m, averageCheck = 0m, expectedCash = 0m, recentOrders = Array.Empty<object>() });
     var completed = shift.Orders.Where(order => order.Status == OrderStatus.Completed).ToList();
     var metrics = BusinessRules.CalculateShift(shift.OpeningCash, completed);
     return Results.Ok(new
     {
-        me = UserDto(user), currentShift = ShiftDto(shift), metrics.Revenue, metrics.OrdersCount, metrics.Cash, metrics.Card, metrics.AverageCheck,
+        me = UserDto(user), currentShift = ShiftDto(shift), metrics.Revenue, metrics.OrdersCount, metrics.Cash, metrics.Card, metrics.AverageCheck, expectedCash = metrics.ExpectedCash,
         recentOrders = completed.OrderByDescending(order => order.CreatedAt).Take(10).Select(OrderDto)
     });
 });

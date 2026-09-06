@@ -33,6 +33,20 @@ public class BusinessRulesTests
         Assert.Equal(375m, result.ExpectedCash);
     }
 
+    [Fact]
+    public void Card_sales_do_not_change_expected_cash_in_drawer()
+    {
+        var result = BusinessRules.CalculateShift(500m,
+        [
+            Order(240m, OrderStatus.Completed, (PaymentMethod.Card, 240m)),
+            Order(125.50m, OrderStatus.Completed, (PaymentMethod.Cash, 125.50m))
+        ]);
+
+        Assert.Equal(125.50m, result.Cash);
+        Assert.Equal(240m, result.Card);
+        Assert.Equal(625.50m, result.ExpectedCash);
+    }
+
     [Theory]
     [InlineData(650, 660, -10)]
     [InlineData(660, 660, 0)]
