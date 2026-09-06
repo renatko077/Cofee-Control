@@ -84,8 +84,9 @@ function App(){
  },[]);
  const selectAnalyticsPeriod=async(period:AnalyticsPeriod)=>{setAnalyticsPeriod(period);try{setAnalytics(await api<Analytics>(`/api/analytics?period=${period}`))}catch(error:any){setToast(error.message)}};
  const loadDailyReport=()=>api<Analytics>(`/api/analytics?period=today&date=${reportDate}`);
+ const sendDailyPdf=async(date:string)=>{const report=await api<Analytics>(`/api/analytics?period=today&date=${encodeURIComponent(date)}`);const {pdfMake,definition}=await createDailyPdf(report,date);const pdfBase64=await pdfMake.createPdf(definition).getBase64();await api('/api/reports/daily/send',{method:'POST',body:JSON.stringify({date,pdfBase64})})};
  const previewDailyReport=async()=>{setReportBusy(true);try{setReportPreview(await loadDailyReport())}catch(error:any){setToast(error.message)}finally{setReportBusy(false)}};
- const downloadDailyPdf=async()=>{setReportBusy(true);try{const report=await loadDailyReport();const {pdfMake,definition}=await createDailyPdf(report,reportDate);const pdfBase64=await pdfMake.createPdf(definition).getBase64();await api('/api/reports/daily/send',{method:'POST',body:JSON.stringify({date:reportDate,pdfBase64})});setReportPreview(null);setToast(`PDF «${reportFileName(reportDate)}» отправлен в чат с ботом`)}catch(error:any){setToast(error.message||'Не удалось отправить PDF')}finally{setReportBusy(false)}};
+ const downloadDailyPdf=async()=>{setReportBusy(true);try{await sendDailyPdf(reportDate);setReportPreview(null);setToast(`PDF «${reportFileName(reportDate)}» отправлен в чат с ботом`)}catch(error:any){setToast(error.message||'Не удалось отправить PDF')}finally{setReportBusy(false)}};
  const setReportDatePart=(part:'day'|'month'|'year',value:number)=>{let [year,month,day]=reportDate.split('-').map(Number);if(part==='day')day=value;if(part==='month')month=value;if(part==='year')year=value;day=Math.min(day,new Date(year,month,0).getDate());const next=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;setReportDate(next>localDate()?localDate():next)};
  const setDatePart=(date:string,setDate:(value:string)=>void,part:'day'|'month'|'year',value:number)=>{let [year,month,day]=date.split('-').map(Number);if(part==='day')day=value;if(part==='month')month=value;if(part==='year')year=value;day=Math.min(day,new Date(year,month,0).getDate());const next=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;setDate(next>localDate()?localDate():next)};
  const loadAdminCatalog=async()=>setAdminCatalog(await api<AdminCatalog>('/api/admin/catalog'));
@@ -138,7 +139,12 @@ function App(){
  };
  const closeShift=async()=>{
   if(!dashboard?.currentShift)return;const value=Number(actualCash.replace(',','.'));if(!Number.isFinite(value)||value<0){setToast('Введите фактическую сумму в кассе');return}
-  setBusy(true);try{await api(`/api/shifts/${dashboard.currentShift.id}/close`,{method:'POST',body:JSON.stringify({actualCash:value,comment:closeComment||null})});setCart([]);setPayment(null);setActualCash('');setCloseComment('');await refresh(analyticsPeriod);setTab('home');setToast('Смена закрыта')}catch(error:any){setToast(error.message)}finally{setBusy(false)}
+  const shiftDate=dashboard.currentShift.businessDate;
+  setBusy(true);try{
+   await api(`/api/shifts/${dashboard.currentShift.id}/close`,{method:'POST',body:JSON.stringify({actualCash:value,comment:closeComment||null})});setCart([]);setPayment(null);setActualCash('');setCloseComment('');
+   let pdfError='';try{await sendDailyPdf(shiftDate)}catch(error:any){pdfError=error.message||'неизвестная ошибка'}
+   await refresh(analyticsPeriod);setTab('home');setToast(pdfError?`Смена закрыта, но PDF не отправлен: ${pdfError}`:'Смена закрыта. PDF-отчёт отправлен в чат')
+  }catch(error:any){setToast(error.message)}finally{setBusy(false)}
  };
 
  if(loading)return <div className="loading"><Coffee/><span>Загружаем кофейню…</span></div>;
@@ -147,7 +153,7 @@ function App(){
   {toast&&<div className="toast" onClick={()=>setToast('')}>{toast}</div>}
 
   {tab==='home'&&<main>
-   <div className="greeting">Добрый день 👋<h1>{dashboard?.currentShift?'Смена в работе':'Готовы открыть кофейню?'}</h1></div>
+   <div className="greeting">Добрый день{dashboard?.me?.firstName?.trim()?`, ${dashboard.me.firstName.trim()}`:dashboard?.me?.username?.trim()?`, ${dashboard.me.username.trim()}`:''} 👋<h1>{dashboard?.currentShift?'Смена в работе':'Готовы открыть кофейню?'}</h1></div>
    {!dashboard?.currentShift?<section className="open-card"><Clock size={32}/><h2>Смена ещё не открыта</h2><p>Укажите наличные в кассе, чтобы начать работу.</p><input inputMode="decimal" placeholder="Наличные на начало, ₴" value={openingCash} onChange={event=>setOpeningCash(event.target.value)}/><button className="primary" onClick={openShift} disabled={busy}>{busy?'Открываем…':'Открыть смену'} <ArrowRight size={18}/></button></section>:<>
     <div className="hero"><span>Выручка смены</span><b>{money(dashboard.revenue)}</b><small>{dashboard.ordersCount||0} заказов · с {dateTime(dashboard.currentShift.openedAt)}</small></div>
     <div className="stats"><div><span>Наличные</span><b>{money(dashboard.cash)}</b></div><div><span>Карта</span><b>{money(dashboard.card)}</b></div><div><span>Средний чек</span><b>{money(dashboard.averageCheck)}</b></div></div>
