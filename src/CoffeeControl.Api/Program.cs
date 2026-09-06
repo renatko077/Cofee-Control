@@ -56,7 +56,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", utc = DateTime.UtcNo
 var botToken = builder.Configuration["TELEGRAM_BOT_TOKEN"];
 var webAppUrl = builder.Configuration["TELEGRAM_WEBAPP_URL"] ?? builder.Configuration["APP_BASE_URL"];
 var bot = string.IsNullOrWhiteSpace(botToken) ? null : new TelegramBotClient(botToken);
-if (bot is not null && !string.IsNullOrWhiteSpace(webAppUrl) && !app.Environment.IsDevelopment())
+if (bot is not null && !string.IsNullOrWhiteSpace(webAppUrl))
     await bot.SetWebhook($"{webAppUrl.TrimEnd('/')}/telegram/webhook", secretToken: builder.Configuration["TELEGRAM_WEBHOOK_SECRET"]);
 
 app.MapPost("/telegram/webhook", async (HttpRequest request, Update update, TelegramAuth auth, AppDbContext db) =>
@@ -69,6 +69,7 @@ app.MapPost("/telegram/webhook", async (HttpRequest request, Update update, Tele
         return Results.Unauthorized();
     if (bot is null || update.Message is null) return Results.Ok();
     var chatId = update.Message.Chat.Id;
+    app.Logger.LogInformation("Telegram update received for chat {ChatId}; hasContact={HasContact}, hasText={HasText}", chatId, update.Message.Contact is not null, update.Message.Text is not null);
     if (update.Message.Contact is not null)
     {
         var contact = update.Message.Contact;
