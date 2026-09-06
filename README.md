@@ -27,6 +27,7 @@
 3. В `/setmenubutton` выберите бота, задайте текст `Открыть кофейню` и URL Railway.
 4. В `/setcommands` добавьте `start - открыть Coffee Control`, `app - открыть приложение`, `help - помощь`.
 5. URL должен быть HTTPS и совпадать с `TELEGRAM_WEBAPP_URL`. Команды бот получает через long polling, поэтому отдельная настройка webhook не требуется.
+6. В BotFather включите **Main Mini App** и укажите тот же URL. После этого ссылка `https://<домен>/open` будет сразу открывать приложение внутри Telegram, без входа в чат бота.
 
 ## Railway
 

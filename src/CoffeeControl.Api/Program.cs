@@ -58,6 +58,7 @@ var webAppUrl = builder.Configuration["TELEGRAM_WEBAPP_URL"]
     ?? builder.Configuration["APP_BASE_URL"]
     ?? (string.IsNullOrWhiteSpace(railwayDomain) ? null : $"https://{railwayDomain}");
 var bot = string.IsNullOrWhiteSpace(botToken) ? null : new TelegramBotClient(botToken);
+var botUsername = builder.Configuration["TELEGRAM_BOT_USERNAME"]?.Trim().TrimStart('@');
 
 async Task HandleTelegramUpdate(Update update, CancellationToken ct)
 {
@@ -98,6 +99,8 @@ async Task HandleTelegramUpdate(Update update, CancellationToken ct)
 
 if (bot is not null)
 {
+    var botInfo = await bot.GetMe();
+    botUsername = botInfo.Username;
     await bot.DeleteWebhook(dropPendingUpdates: true);
     bot.StartReceiving(
         (_, update, ct) => HandleTelegramUpdate(update, ct),
@@ -110,6 +113,13 @@ if (bot is not null)
         app.Lifetime.ApplicationStopping);
     app.Logger.LogInformation("Telegram bot started in long polling mode");
 }
+
+app.MapGet("/open", () =>
+{
+    if (string.IsNullOrWhiteSpace(botUsername))
+        return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Telegram-бот не настроен");
+    return Results.Redirect($"https://t.me/{botUsername}?startapp=direct");
+});
 
 app.MapPost("/telegram/webhook", async (Update update, CancellationToken ct) =>
 {
