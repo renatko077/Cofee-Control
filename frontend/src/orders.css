@@ -9,3 +9,6 @@
 .order-actions{display:flex;gap:7px}
 .order-actions button{width:auto;padding:9px 11px;font-size:12px}
 .cancelled{opacity:.62}
+.order-edited-note{display:inline-block;margin-top:10px;padding:5px 9px;border-radius:9px;background:#efe4dc;color:#6f4e37;font-size:11px;font-weight:600}
+.pay button{background:#fff;color:#6f4e37;border:1px solid #e5dcd4;transition:.15s ease}
+.pay button.selected{background:#eadfd5!important;color:#6f4e37!important;border-color:#6f4e37!important;box-shadow:0 0 0 2px #6f4e3714}

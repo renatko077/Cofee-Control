@@ -283,6 +283,40 @@ app.MapDelete("/api/orders/{id:guid}", async (Guid id, HttpRequest request, AppD
     return Results.Ok(new { ok = true });
 });
 
+app.MapPut("/api/orders/{id:guid}", async (Guid id, HttpRequest request, AppDbContext db, TelegramAuth auth, UpdateOrderDto dto, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (dto.Items is null || dto.Items.Count == 0 || dto.Items.Count > 100 || dto.Items.Any(item => item.Quantity is <= 0 or > 100 || item.ModifierAmount < 0 || item.Modifiers?.Any(modifier => !ModifierPrices.ContainsKey(modifier.Name) || modifier.Quantity is <= 0 or > 3) == true) || dto.Payments is null || dto.Payments.Count == 0 || dto.Payments.Any(payment => payment.Amount <= 0))
+        return Results.BadRequest(new { code = "INVALID_ORDER", message = "Проверьте позиции и способ оплаты." });
+    var order = await db.Orders.Include(x => x.Items).ThenInclude(x => x.Modifiers).Include(x => x.Payments).Include(x => x.Shift)
+        .SingleOrDefaultAsync(x => x.Id == id && x.UserId == user.Id, ct);
+    if (order is null) return Results.NotFound(new { message = "Заказ не найден." });
+    if (order.Status != OrderStatus.Completed) return Results.BadRequest(new { message = "Нельзя изменить удалённый заказ." });
+    var variantIds = dto.Items.Select(item => item.VariantId).Distinct().ToArray();
+    var variants = await db.Variants.AsNoTracking().Include(x => x.Product).Where(x => variantIds.Contains(x.Id) && x.IsActive && x.Product.IsActive && x.Product.Category.IsActive).ToDictionaryAsync(x => x.Id, ct);
+    var newItems = new List<OrderItem>();
+    foreach (var item in dto.Items)
+    {
+        if (!variants.TryGetValue(item.VariantId, out var variant)) return Results.BadRequest(new { code = "PRODUCT_NOT_FOUND", message = "Один из товаров больше недоступен." });
+        var modifiers = (item.Modifiers ?? []).GroupBy(x => x.Name).Select(group => new { Name = group.Key, Quantity = group.Sum(x => x.Quantity) }).ToList();
+        var modifierAmount = modifiers.Sum(x => ModifierPrices.Values[x.Name] * x.Quantity);
+        if (item.ModifierAmount != modifierAmount) return Results.BadRequest(new { code = "INVALID_MODIFIERS", message = "Проверьте выбранные добавки." });
+        var unitPrice = variant.Price + modifierAmount;
+        var coffeePortions = BusinessRules.GetCoffeePortions(variant.Product.Name, item.Quantity);
+        var decafPackets = coffeePortions > 0 ? modifiers.Where(x => x.Name.Equals("Без кофеина", StringComparison.OrdinalIgnoreCase)).Sum(x => x.Quantity) * item.Quantity : 0;
+        newItems.Add(new OrderItem { ProductId = variant.ProductId, ProductVariantId = variant.Id, ProductNameSnapshot = variant.Product.Name, VariantNameSnapshot = variant.Name, BasePrice = variant.Price, Quantity = item.Quantity, CoffeePortions = coffeePortions, DecafPackets = decafPackets, UnitPrice = unitPrice, TotalPrice = unitPrice * item.Quantity, Modifiers = modifiers.Select(x => new OrderItemModifier { ModifierNameSnapshot = x.Name, PriceAdjustmentSnapshot = ModifierPrices.Values[x.Name], Quantity = x.Quantity }).ToList() });
+    }
+    var newTotal = newItems.Sum(x => x.TotalPrice);
+    if (newTotal <= 0 || dto.Payments.Sum(x => x.Amount) != newTotal) return Results.BadRequest(new { code = "PAYMENT_MISMATCH", message = "Сумма оплаты не совпадает с итогом заказа." });
+    var oldCash = order.Payments.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Amount);
+    db.OrderItems.RemoveRange(order.Items); db.Payments.RemoveRange(order.Payments);
+    order.Items = newItems; order.Payments = dto.Payments.Select(x => new Payment { PaymentMethod = x.Method, Amount = x.Amount }).ToList(); order.TotalAmount = newTotal; order.UpdatedAt = DateTime.UtcNow; order.Comment = "Заказ изменён";
+    if (order.Shift.Status == ShiftStatus.Open) order.Shift.ExpectedClosingCash += order.Payments.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Amount) - oldCash;
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(OrderDto(order));
+});
+
 app.MapGet("/api/analytics", async (string? period, string? date, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
 {
     var user = await auth.AuthenticateAsync(request, db, ct);
@@ -469,7 +503,7 @@ app.Run();
 
 static object UserDto(CoffeeControl.Api.User user) => new { id = user.Id, user.FirstName, user.LastName, user.Username, user.Role };
 static object ShiftDto(Shift shift) => new { id = shift.Id, shift.BusinessDate, shift.OpenedAt, shift.ClosedAt, shift.OpeningCash, shift.ExpectedClosingCash, shift.ActualClosingCash, shift.CashDifference, shift.Status, shift.Comment };
-static object OrderDto(Order order) => new { id = order.Id, order.Number, order.TotalAmount, order.CreatedAt, status = order.Status.ToString(), payments = order.Payments.Select(payment => new { method = payment.PaymentMethod.ToString(), payment.Amount }), items = order.Items.Select(item => new { productId = item.ProductId, variantId = item.ProductVariantId, name = item.ProductNameSnapshot, variant = item.VariantNameSnapshot, item.Quantity, item.CoffeePortions, item.DecafPackets, item.UnitPrice, item.TotalPrice, modifiers = item.Modifiers.Select(modifier => new { name = modifier.ModifierNameSnapshot, modifier.Quantity }) }) };
+static object OrderDto(Order order) => new { id = order.Id, order.Number, order.TotalAmount, order.CreatedAt, status = order.Status.ToString(), comment = order.Comment, payments = order.Payments.Select(payment => new { method = payment.PaymentMethod.ToString(), payment.Amount }), items = order.Items.Select(item => new { productId = item.ProductId, variantId = item.ProductVariantId, name = item.ProductNameSnapshot, variant = item.VariantNameSnapshot, item.Quantity, item.CoffeePortions, item.DecafPackets, item.UnitPrice, item.TotalPrice, modifiers = item.Modifiers.Select(modifier => new { name = modifier.ModifierNameSnapshot, modifier.Quantity }) }) };
 static string? ValidateAdminProduct(string? name, string? category, string? variantName, decimal price) =>
     string.IsNullOrWhiteSpace(name) || name.Trim().Length > 100 ? "Укажите название позиции до 100 символов." :
     string.IsNullOrWhiteSpace(category) || category.Trim().Length > 60 ? "Укажите категорию до 60 символов." :
@@ -482,6 +516,7 @@ public record CreateItemDto(Guid VariantId, int Quantity, decimal ModifierAmount
 public record CreateModifierDto(string Name, int Quantity = 1);
 public record CreatePaymentDto(PaymentMethod Method, decimal Amount);
 public record CreateOrderDto(string RequestId, List<CreateItemDto> Items, List<CreatePaymentDto> Payments);
+public record UpdateOrderDto(List<CreateItemDto> Items, List<CreatePaymentDto> Payments);
 public record SendDailyReportDto(string Date, string PdfBase64);
 public record AdminProductDto(string Name, string Category, string? Icon, string VariantName, decimal Price, int? VolumeMl, bool Quick, bool Active = true, Guid? VariantId = null);
 public record DeleteHistoryDto(string Confirmation);
