@@ -6,6 +6,7 @@ import pdfFonts from 'pdfmake/build/vfs_fonts';
 import './style.css';
 import './enhancements.css';
 import './orders.css';
+import FullAdminApp from './AdminApp';
 
 (pdfMake as any).addVirtualFileSystem(pdfFonts);
 
@@ -187,7 +188,7 @@ function App(){
  };
 
  if(loading)return <div className="loading"><Coffee/><span>Загружаем кофейню…</span></div>;
- if(dashboard?.me?.role==='Admin'&&!adminBaristaMode)return <AdminApp onBarista={()=>setAdminBaristaMode(true)}/>;
+ if(dashboard?.me?.role==='Admin'&&!adminBaristaMode)return <FullAdminApp onBarista={()=>setAdminBaristaMode(true)}/>;
  return <div className="app">
   <header><div className="brand"><div className="logo"><Coffee size={22}/></div><div><strong>Coffee Control</strong><small>{dashboard?.currentShift?'Смена открыта':'Рабочая касса'}</small></div></div><button className="avatar" onClick={()=>setTab('more')}>{dashboard?.me?.firstName?.[0]||'Б'}</button></header>
   {toast&&<div className="toast" onClick={()=>setToast('')}>{toast}</div>}
