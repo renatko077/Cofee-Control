@@ -310,10 +310,19 @@ app.MapPut("/api/orders/{id:guid}", async (Guid id, HttpRequest request, AppDbCo
     var newTotal = newItems.Sum(x => x.TotalPrice);
     if (newTotal <= 0 || dto.Payments.Sum(x => x.Amount) != newTotal) return Results.BadRequest(new { code = "PAYMENT_MISMATCH", message = "Сумма оплаты не совпадает с итогом заказа." });
     var oldCash = order.Payments.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Amount);
-    db.OrderItems.RemoveRange(order.Items); db.Payments.RemoveRange(order.Payments);
-    order.Items = newItems; order.Payments = dto.Payments.Select(x => new Payment { PaymentMethod = x.Method, Amount = x.Amount }).ToList(); order.TotalAmount = newTotal; order.UpdatedAt = DateTime.UtcNow; order.Comment = "Заказ изменён";
+    await using var transaction = await db.Database.BeginTransactionAsync(ct);
+    db.OrderItemModifiers.RemoveRange(order.Items.SelectMany(x => x.Modifiers));
+    db.OrderItems.RemoveRange(order.Items);
+    db.Payments.RemoveRange(order.Payments);
+    await db.SaveChangesAsync(ct);
+    foreach (var item in newItems) { item.OrderId = order.Id; item.Order = order; }
+    var newPayments = dto.Payments.Select(x => new Payment { OrderId = order.Id, Order = order, PaymentMethod = x.Method, Amount = x.Amount }).ToList();
+    db.OrderItems.AddRange(newItems); db.Payments.AddRange(newPayments);
+    order.Items = newItems; order.Payments = newPayments;
+    order.TotalAmount = newTotal; order.UpdatedAt = DateTime.UtcNow; order.Comment = "Заказ изменён";
     if (order.Shift.Status == ShiftStatus.Open) order.Shift.ExpectedClosingCash += order.Payments.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Amount) - oldCash;
     await db.SaveChangesAsync(ct);
+    await transaction.CommitAsync(ct);
     return Results.Ok(OrderDto(order));
 });
 
