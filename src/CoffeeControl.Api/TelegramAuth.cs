@@ -9,6 +9,6 @@ public sealed class TelegramAuth(IConfiguration config)
  private static string Digits(string value) => new(value.Where(char.IsDigit).ToArray());
  private bool Matches(string? configured, long id, string? phone) => !string.IsNullOrWhiteSpace(configured) && (long.TryParse(configured.Trim(), out var value) && value == id || Digits(configured) == Digits(phone ?? ""));
  private bool IsAllowed(long id, string? phone) => AccessValues().Any(x => Matches(x, id, phone));
- private bool IsConfiguredHead(long id, string? phone) => Matches(config["ADMIN_TELEGRAM_HEAD"], id, phone);
+ private bool IsConfiguredHead(long id, string? phone) => IsAllowed(id, phone);
  private async Task<User?> GetOrCreateAsync(AppDbContext db,long id,string? username,string first,string? phone,CancellationToken ct,bool contactVerified=false){var u=await db.Users.SingleOrDefaultAsync(x=>x.TelegramId==id,ct);if(!contactVerified && !IsAllowed(id, u?.Phone))return null;if(u is null){u=new User{TelegramId=id,Phone=phone,Username=username,FirstName=first,Role=IsConfiguredHead(id,phone)?Role.Admin:Role.Barista};db.Users.Add(u);}else{if(!u.IsActive)return null;u.LastLoginAt=DateTime.UtcNow;u.Phone=phone??u.Phone;u.Username=username;u.FirstName=first;u.Role=IsConfiguredHead(id,u.Phone)?Role.Admin:Role.Barista;}await db.SaveChangesAsync(ct);return u;}
 }

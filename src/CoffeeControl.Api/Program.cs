@@ -273,7 +273,7 @@ app.MapDelete("/api/orders/{id:guid}", async (Guid id, HttpRequest request, AppD
     var user = await auth.AuthenticateAsync(request, db, ct);
     if (user is null) return Results.Unauthorized();
     var order = await db.Orders.Include(x => x.Items).Include(x => x.Payments).Include(x => x.Shift)
-        .SingleOrDefaultAsync(x => x.Id == id && x.UserId == user.Id, ct);
+        .SingleOrDefaultAsync(x => x.Id == id && (user.Role == Role.Admin || x.UserId == user.Id), ct);
     if (order is null) return Results.NotFound(new { message = "Заказ не найден." });
     if (order.Status != OrderStatus.Completed) return Results.BadRequest(new { message = "Заказ уже отменён." });
     order.Status = OrderStatus.Cancelled; order.CancelledAt = DateTime.UtcNow; order.CancellationReason = "Удалён из списка заказов";
@@ -290,7 +290,7 @@ app.MapPut("/api/orders/{id:guid}", async (Guid id, HttpRequest request, AppDbCo
     if (dto.Items is null || dto.Items.Count == 0 || dto.Items.Count > 100 || dto.Items.Any(item => item.Quantity is <= 0 or > 100 || item.ModifierAmount < 0 || item.Modifiers?.Any(modifier => !ModifierPrices.ContainsKey(modifier.Name) || modifier.Quantity is <= 0 or > 3) == true) || dto.Payments is null || dto.Payments.Count == 0 || dto.Payments.Any(payment => payment.Amount <= 0))
         return Results.BadRequest(new { code = "INVALID_ORDER", message = "Проверьте позиции и способ оплаты." });
     var order = await db.Orders.Include(x => x.Items).ThenInclude(x => x.Modifiers).Include(x => x.Payments).Include(x => x.Shift)
-        .SingleOrDefaultAsync(x => x.Id == id && x.UserId == user.Id, ct);
+        .SingleOrDefaultAsync(x => x.Id == id && (user.Role == Role.Admin || x.UserId == user.Id), ct);
     if (order is null) return Results.NotFound(new { message = "Заказ не найден." });
     if (order.Status != OrderStatus.Completed) return Results.BadRequest(new { message = "Нельзя изменить удалённый заказ." });
     var variantIds = dto.Items.Select(item => item.VariantId).Distinct().ToArray();
@@ -386,6 +386,42 @@ app.MapPost("/api/reports/daily/send", async (HttpRequest request, AppDbContext 
     await using var stream = new MemoryStream(bytes, writable: false);
     await bot.SendDocument(user.TelegramId, InputFile.FromStream(stream, fileName), caption: $"Дневной отчёт за {dateLabel}", cancellationToken: ct);
     return Results.Ok(new { sent = true, fileName });
+});
+
+app.MapGet("/api/admin/overview", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.Json(new { code = "ADMIN_ONLY", message = "Раздел доступен только администратору." }, statusCode: 403);
+    var today = BusinessClock.Today();
+    var orders = db.Orders.AsNoTracking().Where(x => x.Shift.BusinessDate == today && x.Status == OrderStatus.Completed);
+    return Results.Ok(new { revenue = await orders.SumAsync(x => (decimal?)x.TotalAmount, ct) ?? 0, ordersCount = await orders.CountAsync(ct), cash = await orders.SelectMany(x => x.Payments).Where(x => x.PaymentMethod == PaymentMethod.Cash).SumAsync(x => (decimal?)x.Amount, ct) ?? 0, card = await orders.SelectMany(x => x.Payments).Where(x => x.PaymentMethod == PaymentMethod.Card).SumAsync(x => (decimal?)x.Amount, ct) ?? 0, openShifts = await db.Shifts.CountAsync(x => x.Status == ShiftStatus.Open, ct), usersCount = await db.Users.CountAsync(x => x.IsActive, ct) });
+});
+
+app.MapGet("/api/admin/orders", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.StatusCode(403);
+    var orders = await db.Orders.AsNoTracking().Include(x => x.Items).ThenInclude(x => x.Modifiers).Include(x => x.Payments).OrderByDescending(x => x.CreatedAt).Take(500).ToListAsync(ct);
+    return Results.Ok(orders.Select(OrderDto));
+});
+
+app.MapGet("/api/admin/shifts", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.StatusCode(403);
+    var shifts = await db.Shifts.AsNoTracking().Include(x => x.User).OrderByDescending(x => x.OpenedAt).Take(200).ToListAsync(ct);
+    return Results.Ok(shifts.Select(x => new { x.Id, x.BusinessDate, x.OpenedAt, x.ClosedAt, x.OpeningCash, x.ExpectedClosingCash, x.ActualClosingCash, x.CashDifference, status = x.Status.ToString(), user = $"{x.User.FirstName} {x.User.LastName}".Trim() }));
+});
+
+app.MapGet("/api/admin/users", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.StatusCode(403);
+    return Results.Ok(await db.Users.AsNoTracking().OrderBy(x => x.FirstName).Select(x => new { x.Id, x.TelegramId, x.FirstName, x.LastName, x.Username, role = x.Role.ToString(), x.IsActive, x.LastLoginAt }).ToListAsync(ct));
 });
 
 app.MapGet("/api/admin/catalog", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>

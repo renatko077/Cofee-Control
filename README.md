@@ -18,7 +18,7 @@
 
 `DATABASE_URL` — Railway PostgreSQL URL (`postgresql://...`) или обычная Npgsql connection string.
 
-`TELEGRAM_BOT_TOKEN` — token от BotFather. `TELEGRAM_BOT_USERNAME` — username бота. `TELEGRAM_WEBAPP_URL` — публичный HTTPS URL приложения (если не указан, Railway-домен определяется автоматически). Доступ задаётся переменными `ADMIN_TELEGRAM_ID1`, `ADMIN_TELEGRAM_ID2`, `ADMIN_TELEGRAM_ID3` и так далее (в значениях можно указывать Telegram ID или номер телефона, с цифрами и знаком `+`). `ADMIN_TELEGRAM_HEAD` — главный администратор: только он получает настройки владельца; остальные разрешённые пользователи получают доступ как бариста. Старые `ADMIN_TELEGRAM_ID` и `ADMIN_TELEGRAM_IDS` также поддерживаются. При `/start` пользователь должен поделиться своим номером через кнопку. `ASPNETCORE_ENVIRONMENT=Production`. `BUSINESS_TIME_ZONE` — часовой пояс бизнес-дня (по умолчанию `Europe/Vilnius`). Опционально: `APP_BASE_URL`, `LOG_LEVEL`.
+`TELEGRAM_BOT_TOKEN` — токен от BotFather. `TELEGRAM_BOT_USERNAME` — username бота. `TELEGRAM_WEBAPP_URL` — публичный HTTPS URL приложения (если не указан, Railway-домен определяется автоматически). Несколько администраторов задаются переменными `ADMIN_TELEGRAM_ID1`, `ADMIN_TELEGRAM_ID2`, `ADMIN_TELEGRAM_ID3` и так далее, либо списком в `ADMIN_TELEGRAM_IDS` через запятую. Все указанные ID получают отдельную админ-панель; остальные разрешённые пользователи работают как бариста. Старый `ADMIN_TELEGRAM_HEAD` сохраняется для совместимости. При `/start` пользователь должен поделиться своим номером через кнопку. `ASPNETCORE_ENVIRONMENT=Production`. `BUSINESS_TIME_ZONE` — часовой пояс бизнес-дня (по умолчанию `Europe/Vilnius`). Опционально: `APP_BASE_URL`, `LOG_LEVEL`.
 
 ## BotFather
 
@@ -43,7 +43,7 @@ EF Core выполняет `Database.MigrateAsync()` при старте. Для
 
 ## API и безопасность
 
-Frontend передаёт `X-Telegram-Init-Data`; backend проверяет HMAC по официальному алгоритму Telegram, создаёт пользователя и назначает Admin только по `ADMIN_TELEGRAM_ID` (либо совместимому старому `ADMIN_TELEGRAM_IDS`). Цены frontend не доверяются: заказ передаёт только variant IDs, итог рассчитывается из PostgreSQL. `RequestId` защищает от double submit.
+Frontend передаёт `X-Telegram-Init-Data`; backend проверяет HMAC по официальному алгоритму Telegram и назначает Admin всем ID из админского списка. Админ-панель и админские API защищены проверкой роли. Цены frontend не доверяются: заказ передаёт только variant IDs, итог рассчитывается из PostgreSQL. `RequestId` защищает от double submit.
 
 ## Ограничения MVP
 
