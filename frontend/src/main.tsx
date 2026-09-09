@@ -5,6 +5,7 @@ import pdfMake from 'pdfmake/build/pdfmake';
 import pdfFonts from 'pdfmake/build/vfs_fonts';
 import './style.css';
 import './enhancements.css';
+import './orders.css';
 
 (pdfMake as any).addVirtualFileSystem(pdfFonts);
 
@@ -12,12 +13,12 @@ type Variant={id:string,name:string,price:number,volumeMl?:number};
 type Product={id:string,name:string,category:string,icon?:string,quick:boolean,variants:Variant[]};
 type Shift={id:string,businessDate:string,openedAt:string,openingCash:number,expectedClosingCash:number,status:string};
 type Me={firstName:string,lastName?:string,username?:string,role:string};
-type Order={id:string,number:number,totalAmount:number,createdAt:string,status:string,payments:{method:string,amount:number}[],items:{name:string,variant:string,quantity:number,unitPrice:number,totalPrice:number}[]};
+type Order={id:string,number:number,totalAmount:number,createdAt:string,status:string,payments:{method:string,amount:number}[],items:{productId:string,variantId:string,name:string,variant:string,quantity:number,unitPrice:number,totalPrice:number,modifiers:{name:string,quantity:number}[]}[]};
 type Dashboard={me?:Me,currentShift:Shift|null,revenue:number,ordersCount:number,cash:number,card:number,averageCheck:number,expectedCash:number,recentOrders:Order[]};
 type AnalyticsPeriod='today'|'week'|'month';
 type AnalyticsPosition={name:string,quantity:number};
 type Analytics={period:AnalyticsPeriod,periodDays:number,revenue:number,ordersCount:number,averageCheck:number,cash:number,card:number,cups:number,coffeePortions:number,grinderPortions:number,decafCoffees:number,positions:AnalyticsPosition[],daily:{date:string,revenue:number,ordersCount:number}[]};
-type ModifierName='Сироп'|'Растительное молоко'|'Без кофеина';
+type ModifierName='Сироп'|'Растительное молоко'|'Без кофеина'|'Переноска';
 type CartLine={product:Product,variant:Variant,quantity:number,modifiers:ModifierName[]};
 type Tab='home'|'order'|'orders'|'analytics'|'more'|'settings';
 type AdminVariant=Variant&{active:boolean};
@@ -36,8 +37,8 @@ const api=async<T,>(path:string,options:RequestInit={}):Promise<T>=>{
 
 const money=(value=0)=>new Intl.NumberFormat('uk-UA',{style:'currency',currency:'UAH',maximumFractionDigits:2}).format(value);
 const dateTime=(value:string)=>new Date(value).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-const modifierPrices:Record<ModifierName,number>={'Сироп':15,'Растительное молоко':45,'Без кофеина':15};
-const modifiers:Array<{name:ModifierName,label:string}>=[{name:'Сироп',label:'Сироп +15'},{name:'Растительное молоко',label:'Растительное молоко +45'},{name:'Без кофеина',label:'Без кофеина +15'}];
+const modifierPrices:Record<ModifierName,number>={'Сироп':15,'Растительное молоко':45,'Без кофеина':15,'Переноска':10};
+const modifiers:Array<{name:ModifierName,label:string}>=[{name:'Сироп',label:'Сироп +15'},{name:'Растительное молоко',label:'Растительное молоко +45'},{name:'Без кофеина',label:'Без кофеина +15'},{name:'Переноска',label:'Переноска +10'}];
 const localDate=()=>{const now=new Date();return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`};
 const amount=(value=0)=>new Intl.NumberFormat('uk-UA',{minimumFractionDigits:2,maximumFractionDigits:2}).format(value);
 const reportDateLabel=(date:string)=>new Date(`${date}T12:00:00`).toLocaleDateString('ru-RU',{day:'2-digit',month:'long',year:'numeric'});
@@ -56,6 +57,9 @@ function App(){
  const [dashboard,setDashboard]=useState<Dashboard|null>(null);
  const [products,setProducts]=useState<Product[]>([]);
  const [orders,setOrders]=useState<Order[]>([]);
+ const [orderDate,setOrderDate]=useState<'today'|'yesterday'|'custom'>('today');
+ const [customOrderDate,setCustomOrderDate]=useState(localDate);
+ const [editingOrderId,setEditingOrderId]=useState<string|null>(null);
  const [analytics,setAnalytics]=useState<Analytics|null>(null);
  const [analyticsPeriod,setAnalyticsPeriod]=useState<AnalyticsPeriod>('week');
  const [tab,setTab]=useState<Tab>('home');
@@ -80,10 +84,12 @@ function App(){
  const [deleteConfirmation,setDeleteConfirmation]=useState('');
  const [adminBusy,setAdminBusy]=useState(false);
 
+ const orderDateValue=orderDate==='today'?localDate():orderDate==='yesterday'?new Date(Date.now()-86400000).toISOString().slice(0,10):customOrderDate;
+ const loadOrders=useCallback(async()=>setOrders(await api<Order[]>(`/api/orders?date=${orderDateValue}`)),[orderDateValue]);
  const refresh=useCallback(async(period:AnalyticsPeriod)=>{
-  const [dash,orderList,report]=await Promise.all([api<Dashboard>('/api/dashboard'),api<Order[]>('/api/orders'),api<Analytics>(`/api/analytics?period=${period}`)]);
-  setDashboard(dash);setOrders(orderList);setAnalytics(report);
- },[]);
+  const [dash,report]=await Promise.all([api<Dashboard>('/api/dashboard'),api<Analytics>(`/api/analytics?period=${period}`)]);
+  setDashboard(dash);setAnalytics(report);await loadOrders();
+ },[loadOrders]);
  const selectAnalyticsPeriod=async(period:AnalyticsPeriod)=>{setAnalyticsPeriod(period);try{setAnalytics(await api<Analytics>(`/api/analytics?period=${period}`))}catch(error:any){setToast(error.message)}};
  const loadDailyReport=()=>api<Analytics>(`/api/analytics?period=today&date=${reportDate}`);
  const sendDailyPdf=async(date:string)=>{const report=await api<Analytics>(`/api/analytics?period=today&date=${encodeURIComponent(date)}`);const {pdfMake,definition}=await createDailyPdf(report,date);const pdfBase64=await pdfMake.createPdf(definition).getBase64();await api('/api/reports/daily/send',{method:'POST',body:JSON.stringify({date,pdfBase64})})};
@@ -107,6 +113,7 @@ function App(){
 
  useEffect(()=>{setActualCash(dashboard?.currentShift?String(dashboard.expectedCash):'')},[dashboard?.currentShift?.id,dashboard?.expectedCash]);
  useEffect(()=>{if(!toast)return;const timer=setTimeout(()=>setToast(''),3500);return()=>clearTimeout(timer)},[toast]);
+ useEffect(()=>{if(!loading)loadOrders().catch(error=>setToast(error.message))},[loadOrders,loading]);
  useEffect(()=>{const backButton=(window as any).Telegram?.WebApp?.BackButton;if(!reportPreview||!backButton)return;const close=()=>setReportPreview(null);backButton.show();backButton.onClick(close);return()=>{backButton.offClick(close);backButton.hide()}},[reportPreview]);
 
  const categories=useMemo(()=>['Все',...Array.from(new Set(products.map(product=>product.category)))],[products]);
@@ -127,6 +134,12 @@ function App(){
  };
  const changeQuantity=(variantId:string,delta:number)=>setCart(current=>current.map(line=>line.variant.id===variantId?{...line,quantity:line.quantity+delta}:line).filter(line=>line.quantity>0));
  const toggleModifier=(variantId:string,name:ModifierName)=>setCart(current=>current.map(line=>line.variant.id!==variantId?line:line.modifiers.includes(name)?{...line,modifiers:line.modifiers.filter(item=>item!==name)}:{...line,modifiers:[...line.modifiers,name]}));
+ const removeOrder=async(order:Order)=>{if(!window.confirm(`Удалить заказ #${order.number}?`))return;setBusy(true);try{await api(`/api/orders/${order.id}`,{method:'DELETE'});await refresh(analyticsPeriod);setToast('Заказ удалён')}catch(error:any){setToast(error.message)}finally{setBusy(false)}};
+ const editOrder=(order:Order)=>{
+  const lines=order.items.map(item=>{const product=products.find(candidate=>candidate.id===item.productId);const variant=product?.variants.find(candidate=>candidate.id===item.variantId);return product&&variant?{product,variant,quantity:item.quantity,modifiers:item.modifiers.flatMap(modifier=>Array(modifier.quantity).fill(modifier.name as ModifierName))}:null}).filter(Boolean) as CartLine[];
+  if(lines.length!==order.items.length){setToast('Эта позиция больше недоступна для редактирования');return}
+  setCart(lines);setPayment(order.payments[0]?.method==='Cash'?'Cash':'Card');setEditingOrderId(order.id);setTab('order');setToast(`Редактирование заказа #${order.number}`);
+ };
 
  const openShift=async()=>{
   const value=Number(openingCash.replace(',','.'));if(!Number.isFinite(value)||value<0){setToast('Введите корректную сумму в кассе');return}
@@ -135,8 +148,9 @@ function App(){
  const checkout=async()=>{
   if(!payment||!dashboard?.currentShift||cart.length===0||total<=0)return;
   setBusy(true);try{
+   if(editingOrderId){await api(`/api/orders/${editingOrderId}`,{method:'DELETE'});setEditingOrderId(null)}
    await api('/api/orders',{method:'POST',body:JSON.stringify({requestId:crypto.randomUUID(),items:cart.map(line=>({variantId:line.variant.id,quantity:line.quantity,modifierAmount:line.modifiers.reduce((sum,name)=>sum+modifierPrices[name],0),modifiers:line.modifiers.map(name=>({name}))})),payments:[{method:payment,amount:total}]})});
-   setCart([]);setPayment(null);await refresh(analyticsPeriod);setTab('home');setToast('Заказ успешно создан');
+   setCart([]);setPayment(null);await refresh(analyticsPeriod);setTab('home');setToast('Заказ успешно сохранён');
   }catch(error:any){setToast(error.message)}finally{setBusy(false)}
  };
  const closeShift=async()=>{
@@ -173,7 +187,7 @@ function App(){
    </>}
   </main>}
 
-  {tab==='orders'&&<main><div className="title-row"><div><small>Последние 200</small><h1>Заказы</h1></div><button className="icon-button" onClick={()=>refresh(analyticsPeriod).catch(error=>setToast(error.message))}><RefreshCw/></button></div>{orders.map(order=><article className="order-card" key={order.id}><div className="order-top"><div><b>Заказ #{order.number}</b><small>{dateTime(order.createdAt)}</small></div><strong>{money(order.totalAmount)}</strong></div><div className="order-items">{order.items.map((item,index)=><span key={index}>{item.name} × {item.quantity}</span>)}</div><small>{order.payments.map(item=>item.method==='Cash'?'Наличные':'Карта').join(' + ')}</small></article>)}{orders.length===0&&<div className="empty"><ShoppingBag/><h2>Заказов пока нет</h2><p>Созданные продажи появятся здесь.</p></div>}</main>}
+  {tab==='orders'&&<main><div className="title-row"><div><small>История продаж</small><h1>Заказы</h1></div><button className="icon-button" onClick={()=>loadOrders().catch(error=>setToast(error.message))}><RefreshCw/></button></div><div className="period-filter order-filters"><button className={orderDate==='today'?'active':''} onClick={()=>setOrderDate('today')}>Сегодня</button><button className={orderDate==='yesterday'?'active':''} onClick={()=>setOrderDate('yesterday')}>Вчера</button><button className={orderDate==='custom'?'active':''} onClick={()=>setOrderDate('custom')}>Своя дата</button></div>{orderDate==='custom'&&<input className="date-picker" type="date" max={localDate()} value={customOrderDate} onChange={event=>setCustomOrderDate(event.target.value)}/>} {orders.map(order=><article className={`order-card ${order.status==='Cancelled'?'cancelled':''}`} key={order.id}><div className="order-top"><div><b>Заказ #{order.number}</b><small>{dateTime(order.createdAt)}{order.status==='Cancelled'?' · удалён':''}</small></div><strong>{money(order.totalAmount)}</strong></div><div className="order-positions">{order.items.map((item,index)=><div className="order-position" key={index}><div><b>{item.name} × {item.quantity}</b><small>{item.variant} · {money(item.totalPrice)}</small>{item.modifiers?.length>0&&<div className="order-modifiers">{item.modifiers.map((modifier,modifierIndex)=><span key={modifierIndex}>{modifier.name}{modifier.quantity>1?` ×${modifier.quantity}`:''}</span>)}</div>}</div></div>)}</div><div className="order-bottom"><small>{order.payments.map(item=>item.method==='Cash'?'Наличные':'Карта').join(' + ')}</small>{order.status!=='Cancelled'&&<div className="order-actions"><button className="secondary" onClick={()=>editOrder(order)}>Изменить</button><button className="soft-danger" onClick={()=>removeOrder(order)} disabled={busy}><Trash2 size={15}/> Удалить</button></div>}</div></article>)}{orders.length===0&&<div className="empty"><ShoppingBag/><h2>Заказов нет</h2><p>За выбранную дату продаж нет.</p></div>}</main>}
 
   {tab==='analytics'&&<main><div className="title-row"><div><small>{analyticsPeriod==='today'?'Текущий день':analyticsPeriod==='week'?'Последние 7 дней':'Текущий месяц'}</small><h1>Аналитика</h1></div><button className="icon-button" onClick={()=>selectAnalyticsPeriod(analyticsPeriod)}><RefreshCw/></button></div><div className="period-filter"><button className={analyticsPeriod==='today'?'active':''} onClick={()=>selectAnalyticsPeriod('today')}>Сегодня</button><button className={analyticsPeriod==='week'?'active':''} onClick={()=>selectAnalyticsPeriod('week')}>Неделя</button><button className={analyticsPeriod==='month'?'active':''} onClick={()=>selectAnalyticsPeriod('month')}>Месяц</button></div>{analytics&&<><div className="hero"><span>Выручка за период</span><b>{money(analytics.revenue)}</b><small>{analytics.ordersCount} заказов · средний чек {money(analytics.averageCheck)}</small></div><div className="stats"><div><span>Наличные</span><b>{money(analytics.cash)}</b></div><div><span>Карта</span><b>{money(analytics.card)}</b></div><div><span>Заказы</span><b>{analytics.ordersCount}</b></div></div><section className="chart-card report-download"><div className="report-download-head"><div><small>Дневной отчёт</small><h2>Отчёт за день</h2></div><Download/></div><p>Выберите дату, просмотрите расчёт или получите готовый PDF в чате с ботом.</p><div className="date-selects"><label>День<select value={reportDay} onChange={event=>setReportDatePart('day',Number(event.target.value))}>{reportDays.map(day=><option key={day} value={day}>{day}</option>)}</select></label><label>Месяц<select value={reportMonth} onChange={event=>setReportDatePart('month',Number(event.target.value))}>{months.map((month,index)=><option key={month} value={index+1}>{month}</option>)}</select></label><label>Год<select value={reportYear} onChange={event=>setReportDatePart('year',Number(event.target.value))}>{reportYears.map(year=><option key={year} value={year}>{year}</option>)}</select></label></div><div className="report-actions"><button className="secondary" onClick={previewDailyReport} disabled={reportBusy}><Eye size={18}/> Просмотреть</button><button className="primary" onClick={downloadDailyPdf} disabled={reportBusy}>{reportBusy?'Формируем…':'Скачать PDF'} <Download size={18}/></button></div></section><section className="chart-card"><h2>По дням</h2><div className={`chart ${analyticsPeriod==='month'?'month-chart':''}`}>{analytics.daily.map(day=><div className="bar-wrap" key={day.date}><div className="bar-value">{day.ordersCount||''}</div><div className="bar" style={{height:`${Math.max(4,day.revenue/maxChart*120)}px`}}></div><small>{analyticsPeriod==='month'?new Date(`${day.date}T00:00:00`).getDate():new Date(`${day.date}T00:00:00`).toLocaleDateString('ru-RU',{weekday:'short'})}</small></div>)}</div></section></>}</main>}
 

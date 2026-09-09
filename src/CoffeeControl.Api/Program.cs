@@ -257,13 +257,30 @@ app.MapPost("/api/orders", async (HttpRequest request, AppDbContext db, Telegram
     return Results.Ok(OrderDto(order));
 });
 
-app.MapGet("/api/orders", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+app.MapGet("/api/orders", async (string? date, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
 {
     var user = await auth.AuthenticateAsync(request, db, ct);
     if (user is null) return Results.Unauthorized();
-    var orders = await db.Orders.AsNoTracking().Include(order => order.Items).ThenInclude(item => item.Modifiers).Include(order => order.Payments)
-        .Where(order => order.UserId == user.Id).OrderByDescending(order => order.CreatedAt).Take(200).ToListAsync(ct);
+    var query = db.Orders.AsNoTracking().Include(order => order.Items).ThenInclude(item => item.Modifiers).Include(order => order.Payments)
+        .Where(order => order.UserId == user.Id);
+    if (DateOnly.TryParse(date, out var businessDate)) query = query.Where(order => order.Shift.BusinessDate == businessDate);
+    var orders = await query.OrderByDescending(order => order.CreatedAt).Take(200).ToListAsync(ct);
     return Results.Ok(orders.Select(OrderDto));
+});
+
+app.MapDelete("/api/orders/{id:guid}", async (Guid id, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    var order = await db.Orders.Include(x => x.Items).Include(x => x.Payments).Include(x => x.Shift)
+        .SingleOrDefaultAsync(x => x.Id == id && x.UserId == user.Id, ct);
+    if (order is null) return Results.NotFound(new { message = "Заказ не найден." });
+    if (order.Status != OrderStatus.Completed) return Results.BadRequest(new { message = "Заказ уже отменён." });
+    order.Status = OrderStatus.Cancelled; order.CancelledAt = DateTime.UtcNow; order.CancellationReason = "Удалён из списка заказов";
+    if (order.Shift.Status == ShiftStatus.Open)
+        order.Shift.ExpectedClosingCash -= order.Payments.Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Amount);
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new { ok = true });
 });
 
 app.MapGet("/api/analytics", async (string? period, string? date, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
@@ -452,7 +469,7 @@ app.Run();
 
 static object UserDto(CoffeeControl.Api.User user) => new { id = user.Id, user.FirstName, user.LastName, user.Username, user.Role };
 static object ShiftDto(Shift shift) => new { id = shift.Id, shift.BusinessDate, shift.OpenedAt, shift.ClosedAt, shift.OpeningCash, shift.ExpectedClosingCash, shift.ActualClosingCash, shift.CashDifference, shift.Status, shift.Comment };
-static object OrderDto(Order order) => new { id = order.Id, order.Number, order.TotalAmount, order.CreatedAt, status = order.Status.ToString(), payments = order.Payments.Select(payment => new { method = payment.PaymentMethod.ToString(), payment.Amount }), items = order.Items.Select(item => new { name = item.ProductNameSnapshot, variant = item.VariantNameSnapshot, item.Quantity, item.CoffeePortions, item.DecafPackets, item.UnitPrice, item.TotalPrice, modifiers = item.Modifiers.Select(modifier => new { name = modifier.ModifierNameSnapshot, modifier.Quantity }) }) };
+static object OrderDto(Order order) => new { id = order.Id, order.Number, order.TotalAmount, order.CreatedAt, status = order.Status.ToString(), payments = order.Payments.Select(payment => new { method = payment.PaymentMethod.ToString(), payment.Amount }), items = order.Items.Select(item => new { productId = item.ProductId, variantId = item.ProductVariantId, name = item.ProductNameSnapshot, variant = item.VariantNameSnapshot, item.Quantity, item.CoffeePortions, item.DecafPackets, item.UnitPrice, item.TotalPrice, modifiers = item.Modifiers.Select(modifier => new { name = modifier.ModifierNameSnapshot, modifier.Quantity }) }) };
 static string? ValidateAdminProduct(string? name, string? category, string? variantName, decimal price) =>
     string.IsNullOrWhiteSpace(name) || name.Trim().Length > 100 ? "Укажите название позиции до 100 символов." :
     string.IsNullOrWhiteSpace(category) || category.Trim().Length > 60 ? "Укажите категорию до 60 символов." :
@@ -476,7 +493,8 @@ static class ModifierPrices
     {
         ["Сироп"] = 15m,
         ["Растительное молоко"] = 45m,
-        ["Без кофеина"] = 15m
+        ["Без кофеина"] = 15m,
+        ["Переноска"] = 10m
     };
     public static bool ContainsKey(string name) => Values.ContainsKey(name);
 }

@@ -1,0 +1,11 @@
+.order-filters{margin:0 0 12px}
+.date-picker{margin:0 0 10px;background:#fff}
+.order-positions{display:flex;flex-direction:column;gap:10px;margin:12px 0}
+.order-position{padding-bottom:10px;border-bottom:1px solid #f0ebe6}
+.order-position small{margin-top:3px}
+.order-modifiers{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.order-modifiers span{font-size:11px;color:#6f4e37;background:#f5f0eb;border-radius:8px;padding:4px 7px}
+.order-bottom{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.order-actions{display:flex;gap:7px}
+.order-actions button{width:auto;padding:9px 11px;font-size:12px}
+.cancelled{opacity:.62}

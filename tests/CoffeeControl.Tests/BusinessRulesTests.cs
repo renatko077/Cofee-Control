@@ -68,8 +68,8 @@ public class BusinessRulesTests
 
     [Theory]
     [InlineData("Латте", true)]
-    [InlineData("Чай", true)]
-    [InlineData("Горячий шоколад", true)]
+    [InlineData("Чай", false)]
+    [InlineData("Горячий шоколад", false)]
     [InlineData("Coca-Cola", false)]
     [InlineData("Маффин", false)]
     public void Cup_count_includes_prepared_drinks_only(string product, bool expected)

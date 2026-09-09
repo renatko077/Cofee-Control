@@ -13,8 +13,8 @@ public static class DbSeeder
     {
         var categories = new (string Name, string Icon, int SortOrder)[]
         {
-            ("Кофе", "☕", 0), ("Холодные напитки", "🧊", 1), ("Чай", "🍵", 2),
-            ("Еда", "🥐", 3), ("Десерты", "🍰", 4), ("Снеки", "🍫", 5)
+            ("Кофе", "☕", 0), ("Холодные напитки", "🧊", 1), ("Вода", "💧", 2), ("Чай", "🍵", 3),
+            ("Еда", "🥐", 4), ("Десерты", "🍰", 5), ("Снеки", "🍫", 6)
         };
 
         var categoryMap = new Dictionary<string, ProductCategory>();
@@ -71,7 +71,7 @@ public static class DbSeeder
             ("Non Stop Original 250 мл", "Холодные напитки", 40, "250 мл", 250, false),
             ("Non Stop Original 500 мл", "Холодные напитки", 60, "500 мл", 500, false),
             ("Extra Life", "Холодные напитки", 50, "500 мл", 500, false),
-            ("Вода", "Холодные напитки", 45, "500 мл", 500, false),
+            ("Вода", "Вода", 45, "500 мл", 500, false),
             ("Чай", "Чай", 70, "Стандарт", null, true),
             ("Маффин", "Еда", 50, "1 шт.", null, true),
             ("Пончик", "Еда", 50, "1 шт.", null, true),
@@ -98,7 +98,7 @@ public static class DbSeeder
         {
             var category = categoryMap[item.Category];
             var product = await db.Products.Include(x => x.Variants)
-                .FirstOrDefaultAsync(x => x.CategoryId == category.Id && x.Name == item.Name, ct);
+                .FirstOrDefaultAsync(x => x.Name == item.Name, ct);
             if (product is null)
             {
                 product = new Product { Name = item.Name, Category = category, IsQuickOrder = item.Quick, SortOrder = sortByCategory[item.Category]++ };
@@ -119,6 +119,8 @@ public static class DbSeeder
                 else
                     product.Variants.Add(new ProductVariant { Name = item.Variant, VolumeMl = item.Volume, Price = item.Price, IsDefault = product.Variants.Count == 0 });
             }
+            product.Category = category;
+            product.IsActive = true;
         }
 
         await db.SaveChangesAsync(ct);
