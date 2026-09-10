@@ -452,7 +452,7 @@ app.MapGet("/api/admin/users", async (HttpRequest request, AppDbContext db, Tele
     var user = await auth.AuthenticateAsync(request, db, ct);
     if (user is null) return Results.Unauthorized();
     if (user.Role != Role.Admin) return Results.StatusCode(403);
-    return Results.Ok(await db.Users.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.FirstName).Select(x => new { x.Id, x.TelegramId, x.FirstName, x.LastName, x.Username, role = x.Role.ToString(), x.IsActive, x.LastLoginAt }).ToListAsync(ct));
+    return Results.Ok(await db.Users.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.FirstName).Select(x => new { x.Id, x.TelegramId, x.FirstName, x.LastName, x.Username, x.PhotoUrl, role = x.Role.ToString(), x.IsActive, x.LastLoginAt }).ToListAsync(ct));
 });
 
 app.MapPut("/api/admin/users/{id:guid}", async (Guid id, HttpRequest request, AppDbContext db, TelegramAuth auth, AdminUserDto dto, CancellationToken ct) =>
