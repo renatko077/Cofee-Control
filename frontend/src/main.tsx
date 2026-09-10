@@ -115,6 +115,7 @@ function App(){
  const selectAnalyticsPeriod=async(period:AnalyticsPeriod)=>{setAnalyticsPeriod(period);try{setAnalytics(await api<Analytics>(`/api/analytics?period=${period}`))}catch(error:any){setToast(error.message)}};
  const loadDailyReport=()=>api<Analytics>(`/api/analytics?period=today&date=${reportDate}`);
  const sendDailyPdf=async(date:string)=>{const report=await api<Analytics>(`/api/analytics?period=today&date=${encodeURIComponent(date)}`);const {pdfMake,definition}=await createDailyPdf(report,date);const pdfBase64=await pdfMake.createPdf(definition).getBase64();await api('/api/reports/daily/send',{method:'POST',body:JSON.stringify({date,pdfBase64})})};
+ const sendAdminPdf=async(from:string,to:string,caption:string)=>{const report=await api<Analytics>(`/api/admin/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);const {pdfMake,definition}=await createDailyPdf(report,to);const pdfBase64=await pdfMake.createPdf(definition).getBase64();await api('/api/reports/daily/send',{method:'POST',body:JSON.stringify({date:to,pdfBase64,caption})})};
  const previewDailyReport=async()=>{setReportBusy(true);try{setReportPreview(await loadDailyReport())}catch(error:any){setToast(error.message)}finally{setReportBusy(false)}};
  const downloadDailyPdf=async()=>{setReportBusy(true);try{await sendDailyPdf(reportDate);setReportPreview(null);setToast(`PDF «${reportFileName(reportDate)}» отправлен в чат с ботом`)}catch(error:any){setToast(error.message||'Не удалось отправить PDF')}finally{setReportBusy(false)}};
  const setReportDatePart=(part:'day'|'month'|'year',value:number)=>{let [year,month,day]=reportDate.split('-').map(Number);if(part==='day')day=value;if(part==='month')month=value;if(part==='year')year=value;day=Math.min(day,new Date(year,month,0).getDate());const next=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;setReportDate(next>localDate()?localDate():next)};
@@ -188,7 +189,7 @@ function App(){
  };
 
  if(loading)return <div className="loading"><Coffee/><span>Загружаем кофейню…</span></div>;
- if(dashboard?.me?.role==='Admin'&&!adminBaristaMode)return <FullAdminApp onBarista={()=>setAdminBaristaMode(true)} onReport={sendDailyPdf}/>;
+ if(dashboard?.me?.role==='Admin'&&!adminBaristaMode)return <FullAdminApp onBarista={()=>setAdminBaristaMode(true)} onReport={sendAdminPdf}/>;
  return <div className="app">
   <header><div className="brand"><div className="logo"><Coffee size={22}/></div><div><strong>Coffee Control</strong><small>{dashboard?.currentShift?'Смена открыта':'Рабочая касса'}</small></div></div><button className="avatar" onClick={()=>setTab('more')}>{dashboard?.me?.firstName?.[0]||'Б'}</button></header>
   {toast&&<div className="toast" onClick={()=>setToast('')}>{toast}</div>}

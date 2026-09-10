@@ -397,7 +397,12 @@ app.MapPost("/api/reports/daily/send", async (HttpRequest request, AppDbContext 
     var month = culture.DateTimeFormat.GetMonthName(reportDate.Month);
     var fileName = $"Отчет-{reportDate:dd}-{month}-{reportDate:yyyy}.pdf";
     await using var stream = new MemoryStream(bytes, writable: false);
-    var caption = $"Бариста {user.FirstName} · {dateLabel}";
+    var caption = string.IsNullOrWhiteSpace(dto.Caption) ? $"Бариста {user.FirstName} · {dateLabel}" : dto.Caption.Trim();
+    if (user.Role == Role.Admin && caption.StartsWith("Бариста ·", StringComparison.Ordinal))
+    {
+        var shiftBarista = await db.Shifts.AsNoTracking().Where(shift => shift.BusinessDate == reportDate).OrderByDescending(shift => shift.OpenedAt).Select(shift => shift.User.FirstName).FirstOrDefaultAsync(ct);
+        if (!string.IsNullOrWhiteSpace(shiftBarista)) caption = $"Бариста {shiftBarista} · {dateLabel}";
+    }
     var recipients = await db.Users.AsNoTracking().Where(item => item.IsActive && (item.Id == user.Id || item.Role == Role.Admin)).Select(item => item.TelegramId).Distinct().ToListAsync(ct);
     foreach (var recipient in recipients)
     {
@@ -447,7 +452,7 @@ app.MapGet("/api/admin/users", async (HttpRequest request, AppDbContext db, Tele
     var user = await auth.AuthenticateAsync(request, db, ct);
     if (user is null) return Results.Unauthorized();
     if (user.Role != Role.Admin) return Results.StatusCode(403);
-    return Results.Ok(await db.Users.AsNoTracking().OrderBy(x => x.FirstName).Select(x => new { x.Id, x.TelegramId, x.FirstName, x.LastName, x.Username, role = x.Role.ToString(), x.IsActive, x.LastLoginAt }).ToListAsync(ct));
+    return Results.Ok(await db.Users.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.FirstName).Select(x => new { x.Id, x.TelegramId, x.FirstName, x.LastName, x.Username, role = x.Role.ToString(), x.IsActive, x.LastLoginAt }).ToListAsync(ct));
 });
 
 app.MapPut("/api/admin/users/{id:guid}", async (Guid id, HttpRequest request, AppDbContext db, TelegramAuth auth, AdminUserDto dto, CancellationToken ct) =>
@@ -463,6 +468,19 @@ app.MapPut("/api/admin/users/{id:guid}", async (Guid id, HttpRequest request, Ap
     return Results.Ok(new { message = "Данные сотрудника обновлены." });
 });
 
+app.MapDelete("/api/admin/users/{id:guid}", async (Guid id, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.StatusCode(403);
+    if (user.Id == id) return Results.BadRequest(new { message = "Нельзя удалить самого себя." });
+    var target = await db.Users.FindAsync([id], ct);
+    if (target is null) return Results.NotFound(new { message = "Сотрудник не найден." });
+    target.IsActive = false;
+    await db.SaveChangesAsync(ct);
+    return Results.Ok(new { message = "Сотрудник удалён из списка. История смен сохранена." });
+});
+
 app.MapGet("/api/admin/analytics", async (string? from, string? to, Guid? userId, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
 {
     var user = await auth.AuthenticateAsync(request, db, ct);
@@ -474,6 +492,21 @@ app.MapGet("/api/admin/analytics", async (string? from, string? to, Guid? userId
     if (userId is not null) query = query.Where(x => x.UserId == userId);
     var rows = await query.Select(x => new { x.TotalAmount, Payments = x.Payments.Select(p => new { p.PaymentMethod, p.Amount }), Items = x.Items.Select(i => new { i.ProductNameSnapshot, i.Quantity }) }).ToListAsync(ct);
     return Results.Ok(new { from = start, to = end, revenue = rows.Sum(x => x.TotalAmount), ordersCount = rows.Count, cash = rows.SelectMany(x => x.Payments).Where(x => x.PaymentMethod == PaymentMethod.Cash).Sum(x => x.Amount), card = rows.SelectMany(x => x.Payments).Where(x => x.PaymentMethod == PaymentMethod.Card).Sum(x => x.Amount), positions = rows.SelectMany(x => x.Items).GroupBy(x => x.ProductNameSnapshot).Select(x => new { name = x.Key, quantity = x.Sum(i => i.Quantity) }).OrderByDescending(x => x.quantity).Take(10) });
+});
+
+app.MapGet("/api/admin/report", async (string? from, string? to, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
+{
+    var user = await auth.AuthenticateAsync(request, db, ct);
+    if (user is null) return Results.Unauthorized();
+    if (user.Role != Role.Admin) return Results.StatusCode(403);
+    var end = DateOnly.TryParse(to, out var parsedTo) ? parsedTo : BusinessClock.Today();
+    var start = DateOnly.TryParse(from, out var parsedFrom) ? parsedFrom : end;
+    if (start > end) (start, end) = (end, start);
+    var rows = await db.Orders.AsNoTracking().Where(order => order.Status == OrderStatus.Completed && order.Shift.BusinessDate >= start && order.Shift.BusinessDate <= end)
+        .Select(order => new { order.Shift.BusinessDate, order.TotalAmount, Payments = order.Payments.Select(payment => new { payment.PaymentMethod, payment.Amount }), Items = order.Items.Select(item => new { item.ProductNameSnapshot, item.Quantity, item.CoffeePortions, item.DecafPackets }) }).ToListAsync(ct);
+    var sales = rows.SelectMany(row => row.Items).Select(item => new { item.ProductNameSnapshot, item.Quantity, Cups = BusinessRules.UsesCup(item.ProductNameSnapshot) ? item.Quantity : 0, CoffeePortions = item.CoffeePortions > 0 ? item.CoffeePortions : BusinessRules.GetCoffeePortions(item.ProductNameSnapshot, item.Quantity), item.DecafPackets }).ToList();
+    var daily = Enumerable.Range(0, end.DayNumber - start.DayNumber + 1).Select(offset => start.AddDays(offset)).Select(day => new { date = day, revenue = rows.Where(row => row.BusinessDate == day).Sum(row => row.TotalAmount), ordersCount = rows.Count(row => row.BusinessDate == day) });
+    return Results.Ok(new { period = start == end ? "today" : "custom", periodDays = end.DayNumber - start.DayNumber + 1, revenue = rows.Sum(row => row.TotalAmount), ordersCount = rows.Count, averageCheck = rows.Count == 0 ? 0 : rows.Average(row => row.TotalAmount), cash = rows.SelectMany(row => row.Payments).Where(payment => payment.PaymentMethod == PaymentMethod.Cash).Sum(payment => payment.Amount), card = rows.SelectMany(row => row.Payments).Where(payment => payment.PaymentMethod == PaymentMethod.Card).Sum(payment => payment.Amount), daily, cups = sales.Sum(item => item.Cups), coffeePortions = sales.Sum(item => item.CoffeePortions), grinderPortions = sales.Where(item => item.DecafPackets == 0).Sum(item => item.CoffeePortions), decafCoffees = sales.Sum(item => item.DecafPackets), positions = sales.GroupBy(item => item.ProductNameSnapshot).Select(group => new { name = group.Key, quantity = group.Sum(item => item.Quantity) }).OrderByDescending(item => item.quantity).ThenBy(item => item.name) });
 });
 
 app.MapGet("/api/admin/catalog", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
@@ -614,7 +647,7 @@ public record CreateModifierDto(string Name, int Quantity = 1);
 public record CreatePaymentDto(PaymentMethod Method, decimal Amount);
 public record CreateOrderDto(string RequestId, List<CreateItemDto> Items, List<CreatePaymentDto> Payments);
 public record UpdateOrderDto(List<CreateItemDto> Items, List<CreatePaymentDto> Payments);
-public record SendDailyReportDto(string Date, string PdfBase64);
+public record SendDailyReportDto(string Date, string PdfBase64, string? Caption = null);
 public record AdminProductDto(string Name, string Category, string? Icon, string VariantName, decimal Price, int? VolumeMl, bool Quick, bool Active = true, Guid? VariantId = null);
 public record AdminUserDto(bool IsActive, Role Role);
 public record DeleteHistoryDto(string Confirmation);
