@@ -74,6 +74,17 @@ var webAppUrl = builder.Configuration["TELEGRAM_WEBAPP_URL"]
 var bot = string.IsNullOrWhiteSpace(botToken) ? null : new TelegramBotClient(botToken);
 var botUsername = builder.Configuration["TELEGRAM_BOT_USERNAME"]?.Trim().TrimStart('@');
 
+async Task NotifyAdminsAsync(AppDbContext db, string message, CancellationToken ct)
+{
+    if (bot is null) return;
+    var chatIds = await db.Users.AsNoTracking().Where(user => user.Role == Role.Admin && user.IsActive).Select(user => user.TelegramId).Distinct().ToListAsync(ct);
+    foreach (var chatId in chatIds)
+    {
+        try { await bot.SendMessage(chatId, message, cancellationToken: ct); }
+        catch (Exception error) { app.Logger.LogWarning(error, "Unable to notify admin {ChatId}", chatId); }
+    }
+}
+
 async Task HandleTelegramUpdate(Update update, CancellationToken ct)
 {
     if (bot is null || update.Message is null) return;
@@ -188,6 +199,7 @@ app.MapPost("/api/shifts/open", async (HttpRequest request, AppDbContext db, Tel
     var shift = new Shift { UserId = user.Id, BusinessDate = BusinessClock.Today(), OpeningCash = dto.OpeningCash, ExpectedClosingCash = dto.OpeningCash };
     db.Shifts.Add(shift);
     await db.SaveChangesAsync(ct);
+    await NotifyAdminsAsync(db, $"🟢 Бариста {user.FirstName} открыл смену\nДата: {shift.BusinessDate.ToString("d MMMM yyyy", CultureInfo.GetCultureInfo("ru-RU"))}\nСтартовая касса: {shift.OpeningCash:0.00} грн", ct);
     return Results.Ok(ShiftDto(shift));
 });
 
@@ -208,6 +220,7 @@ app.MapPost("/api/shifts/{id:guid}/close", async (Guid id, HttpRequest request, 
     shift.Status = ShiftStatus.Closed;
     shift.Comment = string.IsNullOrWhiteSpace(dto.Comment) ? null : dto.Comment.Trim()[..Math.Min(dto.Comment.Trim().Length, 500)];
     await db.SaveChangesAsync(ct);
+    await NotifyAdminsAsync(db, $"🔴 Бариста {user.FirstName} закрыл смену\nДата: {shift.BusinessDate.ToString("d MMMM yyyy", CultureInfo.GetCultureInfo("ru-RU"))}\nФакт: {shift.ActualClosingCash:0.00} грн\nРазница: {shift.CashDifference:0.00} грн", ct);
     return Results.Ok(ShiftDto(shift));
 });
 
@@ -384,7 +397,13 @@ app.MapPost("/api/reports/daily/send", async (HttpRequest request, AppDbContext 
     var month = culture.DateTimeFormat.GetMonthName(reportDate.Month);
     var fileName = $"Отчет-{reportDate:dd}-{month}-{reportDate:yyyy}.pdf";
     await using var stream = new MemoryStream(bytes, writable: false);
-    await bot.SendDocument(user.TelegramId, InputFile.FromStream(stream, fileName), caption: $"Дневной отчёт за {dateLabel}", cancellationToken: ct);
+    var caption = $"Бариста {user.FirstName} · {dateLabel}";
+    var recipients = await db.Users.AsNoTracking().Where(item => item.IsActive && (item.Id == user.Id || item.Role == Role.Admin)).Select(item => item.TelegramId).Distinct().ToListAsync(ct);
+    foreach (var recipient in recipients)
+    {
+        stream.Position = 0;
+        await bot.SendDocument(recipient, InputFile.FromStream(stream, fileName), caption: caption, cancellationToken: ct);
+    }
     return Results.Ok(new { sent = true, fileName });
 });
 
@@ -492,7 +511,7 @@ app.MapPost("/api/admin/products", async (HttpRequest request, AppDbContext db, 
     var category = await db.Categories.FirstOrDefaultAsync(item => item.Name.ToLower() == categoryName.ToLower(), ct);
     if (category is null)
     {
-        category = new ProductCategory { Name = categoryName, Icon = string.IsNullOrWhiteSpace(dto.Icon) ? "☕" : dto.Icon.Trim(), SortOrder = (await db.Categories.MaxAsync(item => (int?)item.SortOrder, ct) ?? 0) + 1 };
+        category = new ProductCategory { Name = categoryName, Icon = string.IsNullOrWhiteSpace(dto.Icon) ? null : dto.Icon.Trim(), SortOrder = (await db.Categories.MaxAsync(item => (int?)item.SortOrder, ct) ?? 0) + 1 };
         db.Categories.Add(category);
     }
     var product = new Product
@@ -519,7 +538,7 @@ app.MapPut("/api/admin/products/{id:guid}", async (Guid id, HttpRequest request,
     var category = await db.Categories.FirstOrDefaultAsync(item => item.Name.ToLower() == categoryName.ToLower(), ct);
     if (category is null)
     {
-        category = new ProductCategory { Name = categoryName, Icon = string.IsNullOrWhiteSpace(dto.Icon) ? "☕" : dto.Icon.Trim(), SortOrder = (await db.Categories.MaxAsync(item => (int?)item.SortOrder, ct) ?? 0) + 1 };
+        category = new ProductCategory { Name = categoryName, Icon = string.IsNullOrWhiteSpace(dto.Icon) ? null : dto.Icon.Trim(), SortOrder = (await db.Categories.MaxAsync(item => (int?)item.SortOrder, ct) ?? 0) + 1 };
         db.Categories.Add(category);
     }
     else if (!string.IsNullOrWhiteSpace(dto.Icon)) category.Icon = dto.Icon.Trim();
