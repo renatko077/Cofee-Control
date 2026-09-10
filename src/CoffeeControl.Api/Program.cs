@@ -629,15 +629,6 @@ app.MapPost("/api/admin/history/{date}/delete", async (string date, HttpRequest 
     return Results.Ok(new { deletedShifts = deleted, message = deleted == 0 ? "За выбранный день данных не было." : "История выбранного дня удалена." });
 });
 
-app.MapPost("/api/admin/history/delete-all", async (HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
-{
-    var user = await auth.AuthenticateAsync(request, db, ct);
-    if (user is null) return Results.Unauthorized();
-    if (user.Role != Role.Admin) return Results.StatusCode(403);
-    var deleted = await db.Shifts.ExecuteDeleteAsync(ct);
-    return Results.Ok(new { deletedShifts = deleted, message = deleted == 0 ? "История уже пустая." : "Вся история смен и заказов удалена." });
-});
-
 app.MapFallbackToFile("index.html");
 app.Run();
 
