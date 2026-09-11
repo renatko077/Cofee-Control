@@ -127,8 +127,8 @@ function App(){
  },[loadOrders]);
  const selectAnalyticsPeriod=async(period:AnalyticsPeriod)=>{setAnalyticsPeriod(period);try{setAnalytics(await api<Analytics>(`/api/analytics?period=${period}`))}catch(error:any){setToast(error.message)}};
  const loadDailyReport=()=>api<Analytics>(`/api/analytics?period=today&date=${reportDate}`);
- const sendDailyPdf=async(date:string)=>{const report=await api<Analytics>(`/api/analytics?period=today&date=${encodeURIComponent(date)}`);const {pdfMake,definition}=await createDailyPdf(report,date);const pdfBase64=await pdfMake.createPdf(definition).getBase64();await api('/api/reports/daily/send',{method:'POST',body:JSON.stringify({date,pdfBase64})})};
- const sendAdminPdf=async(from:string,to:string,caption:string)=>{const report=await api<Analytics>(`/api/admin/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);const {pdfMake,definition}=await createDailyPdf(report,to);const pdfBase64=await pdfMake.createPdf(definition).getBase64();await api('/api/reports/daily/send',{method:'POST',body:JSON.stringify({date:to,pdfBase64,caption})})};
+ const sendDailyPdf=async(date:string,adminsOnly=false)=>{const report=await api<Analytics>(`/api/analytics?period=today&date=${encodeURIComponent(date)}`);const {pdfMake,definition}=await createDailyPdf(report,date);const pdfBase64=await pdfMake.createPdf(definition).getBase64();await api('/api/reports/daily/send',{method:'POST',body:JSON.stringify({date,pdfBase64,adminsOnly})})};
+ const sendAdminPdf=async(from:string,to:string,caption:string)=>{const report=await api<Analytics>(`/api/admin/report?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);const {pdfMake,definition}=await createDailyPdf(report,to);const pdfBase64=await pdfMake.createPdf(definition).getBase64();await api('/api/reports/daily/send',{method:'POST',body:JSON.stringify({date:to,pdfBase64,caption,adminsOnly:true})})};
  const previewDailyReport=async()=>{setReportBusy(true);try{setReportPreview(await loadDailyReport())}catch(error:any){setToast(error.message)}finally{setReportBusy(false)}};
  const downloadDailyPdf=async()=>{setReportBusy(true);try{await sendDailyPdf(reportDate);setReportPreview(null);setToast(`PDF «${reportFileName(reportDate)}» отправлен в чат с ботом`)}catch(error:any){setToast(error.message||'Не удалось отправить PDF')}finally{setReportBusy(false)}};
  const setReportDatePart=(part:'day'|'month'|'year',value:number)=>{let [year,month,day]=reportDate.split('-').map(Number);if(part==='day')day=value;if(part==='month')month=value;if(part==='year')year=value;day=Math.min(day,new Date(year,month,0).getDate());const next=`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;setReportDate(next>localDate()?localDate():next)};
@@ -196,7 +196,7 @@ function App(){
   const shiftDate=dashboard.currentShift.businessDate;
   setBusy(true);try{
    await api(`/api/shifts/${dashboard.currentShift.id}/close`,{method:'POST',body:JSON.stringify({actualCash:value,comment:closeComment||null})});setCart([]);setPayment(null);setActualCash('');setCloseComment('');
-   let pdfError='';try{await sendDailyPdf(shiftDate)}catch(error:any){pdfError=error.message||'неизвестная ошибка'}
+   let pdfError='';try{await sendDailyPdf(shiftDate,true)}catch(error:any){pdfError=error.message||'неизвестная ошибка'}
    await refresh(analyticsPeriod);setTab('home');setToast(pdfError?`Смена закрыта, но PDF не отправлен: ${pdfError}`:'Смена закрыта. PDF-отчёт отправлен в чат')
   }catch(error:any){setToast(error.message)}finally{setBusy(false)}
  };

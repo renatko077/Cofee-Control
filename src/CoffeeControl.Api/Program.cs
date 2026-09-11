@@ -61,6 +61,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
+    await scope.ServiceProvider.GetRequiredService<TelegramAuth>().SynchronizeRolesAsync(db, default);
     await DbSeeder.SeedAsync(db, default);
 }
 
@@ -396,20 +397,35 @@ app.MapPost("/api/reports/daily/send", async (HttpRequest request, AppDbContext 
     var dateLabel = reportDate.ToString("dd MMMM yyyy", culture);
     var month = culture.DateTimeFormat.GetMonthName(reportDate.Month);
     var fileName = $"Отчет-{reportDate:dd}-{month}-{reportDate:yyyy}.pdf";
-    await using var stream = new MemoryStream(bytes, writable: false);
     var caption = string.IsNullOrWhiteSpace(dto.Caption) ? $"Бариста {user.FirstName} · {dateLabel}" : dto.Caption.Trim();
     if (user.Role == Role.Admin && caption.StartsWith("Бариста ·", StringComparison.Ordinal))
     {
         var shiftBarista = await db.Shifts.AsNoTracking().Where(shift => shift.BusinessDate == reportDate).OrderByDescending(shift => shift.OpenedAt).Select(shift => shift.User.FirstName).FirstOrDefaultAsync(ct);
         if (!string.IsNullOrWhiteSpace(shiftBarista)) caption = $"Бариста {shiftBarista} · {dateLabel}";
     }
-    var recipients = await db.Users.AsNoTracking().Where(item => item.IsActive && (item.Id == user.Id || item.Role == Role.Admin)).Select(item => item.TelegramId).Distinct().ToListAsync(ct);
+    var adminsOnly = dto.AdminsOnly || user.Role == Role.Admin;
+    var recipients = adminsOnly
+        ? await db.Users.AsNoTracking().Where(item => item.IsActive && item.Role == Role.Admin).Select(item => item.TelegramId).Distinct().ToListAsync(ct)
+        : [user.TelegramId];
+    if (recipients.Count == 0)
+        return Results.BadRequest(new { code = "ADMIN_NOT_CONFIGURED", message = "Не найден активный администратор для отправки отчёта." });
+    var sent = 0;
     foreach (var recipient in recipients)
     {
-        stream.Position = 0;
-        await bot.SendDocument(recipient, InputFile.FromStream(stream, fileName), caption: caption, cancellationToken: ct);
+        try
+        {
+            await using var stream = new MemoryStream(bytes, writable: false);
+            await bot.SendDocument(recipient, InputFile.FromStream(stream, fileName), caption: caption, cancellationToken: ct);
+            sent++;
+        }
+        catch (Exception error)
+        {
+            app.Logger.LogWarning(error, "Unable to send PDF report to Telegram chat {ChatId}", recipient);
+        }
     }
-    return Results.Ok(new { sent = true, fileName });
+    return sent > 0
+        ? Results.Ok(new { sent = true, recipients = sent, fileName })
+        : Results.Problem(statusCode: StatusCodes.Status502BadGateway, title: "Не удалось отправить PDF", detail: "Telegram не принял файл. Откройте чат с ботом, нажмите /start и повторите отправку.");
 });
 
 app.MapGet("/api/admin/overview", async (string? date, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
@@ -453,19 +469,6 @@ app.MapGet("/api/admin/users", async (HttpRequest request, AppDbContext db, Tele
     if (user is null) return Results.Unauthorized();
     if (user.Role != Role.Admin) return Results.StatusCode(403);
     return Results.Ok(await db.Users.AsNoTracking().Where(x => x.IsActive).OrderBy(x => x.FirstName).Select(x => new { x.Id, x.TelegramId, x.FirstName, x.LastName, x.Username, x.PhotoUrl, role = x.Role.ToString(), x.IsActive, x.LastLoginAt }).ToListAsync(ct));
-});
-
-app.MapPut("/api/admin/users/{id:guid}", async (Guid id, HttpRequest request, AppDbContext db, TelegramAuth auth, AdminUserDto dto, CancellationToken ct) =>
-{
-    var user = await auth.AuthenticateAsync(request, db, ct);
-    if (user is null) return Results.Unauthorized();
-    if (user.Role != Role.Admin) return Results.StatusCode(403);
-    var target = await db.Users.FindAsync([id], ct);
-    if (target is null) return Results.NotFound(new { message = "Сотрудник не найден." });
-    if (target.Id == user.Id && !dto.IsActive) return Results.BadRequest(new { message = "Нельзя заблокировать самого себя." });
-    target.IsActive = dto.IsActive; target.Role = dto.Role;
-    await db.SaveChangesAsync(ct);
-    return Results.Ok(new { message = "Данные сотрудника обновлены." });
 });
 
 app.MapDelete("/api/admin/users/{id:guid}", async (Guid id, HttpRequest request, AppDbContext db, TelegramAuth auth, CancellationToken ct) =>
@@ -648,9 +651,8 @@ public record CreateModifierDto(string Name, int Quantity = 1);
 public record CreatePaymentDto(PaymentMethod Method, decimal Amount);
 public record CreateOrderDto(string RequestId, List<CreateItemDto> Items, List<CreatePaymentDto> Payments);
 public record UpdateOrderDto(List<CreateItemDto> Items, List<CreatePaymentDto> Payments);
-public record SendDailyReportDto(string Date, string PdfBase64, string? Caption = null);
+public record SendDailyReportDto(string Date, string PdfBase64, string? Caption = null, bool AdminsOnly = false);
 public record AdminProductDto(string Name, string Category, string? Icon, string VariantName, decimal Price, int? VolumeMl, bool Quick, bool Active = true, Guid? VariantId = null);
-public record AdminUserDto(bool IsActive, Role Role);
 public record DeleteHistoryDto(string Confirmation);
 public partial class Program { }
 
